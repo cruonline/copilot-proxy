@@ -61,6 +61,7 @@ export interface Model {
     endpoints?: string[];
     upstream?: Record<string, unknown>;
     contextWindow?: number;
+    reasoningEfforts?: string[];
     access?: 'authorized' | 'setup-required';
     capabilities: {
         images: boolean | 'unknown';

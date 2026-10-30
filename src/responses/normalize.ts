@@ -222,9 +222,10 @@ export function normalize(raw: unknown, protocol: Protocol, countOnly = false): 
     const stop = b.stop_sequences ?? b.stop;
     if (stop !== undefined && stop !== null)
         t.stop = typeof stop === 'string' ? [stop] : array(stop, 'stop sequences').map(v => string(v, 'stop sequence'));
-    if (b.reasoning_effort !== undefined) {
-        const effort = string(b.reasoning_effort, 'reasoning_effort');
-        if (!['none', 'minimal', 'low', 'medium', 'high'].includes(effort))
+    const rawEffort = b.reasoning_effort ?? (protocol === 'responses' && b.reasoning && typeof b.reasoning === 'object' ? b.reasoning.effort : undefined);
+    if (rawEffort !== undefined && rawEffort !== null) {
+        const effort = string(rawEffort, 'reasoning_effort');
+        if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort))
             throw new ProxyError(400, 'Unsupported reasoning effort.');
         t.reasoningEffort = effort;
     }

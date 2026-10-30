@@ -25,6 +25,16 @@ describe('Automatic Codex catalog file', () => {
         await writer.update(destination, []);
         expect(JSON.parse(await fs.readFile(destination, 'utf8')).models[0].slug).to.equal('new');
     });
+    it('advertises only known upstream reasoning efforts', async () => {
+        const writer = new CatalogWriter();
+        const destination = path.join(directory, 'reasoning.json');
+        await writer.update(destination, [{ ...models('r')[0], reasoningEfforts: ['low', 'medium', 'high', 'bogus'] }, models('plain')[0]]);
+        const [reasoning, plain] = JSON.parse(await fs.readFile(destination, 'utf8')).models;
+        expect(reasoning.supported_reasoning_levels.map((l: { effort: string }) => l.effort)).to.deep.equal(['low', 'medium', 'high']);
+        expect(reasoning.default_reasoning_level).to.equal('medium');
+        expect(plain.supported_reasoning_levels).to.deep.equal([]);
+        expect(plain.default_reasoning_level).to.equal(null);
+    });
     it('recovers from a failed destination and leaves the last valid catalog untouched', async () => {
         const writer = new CatalogWriter();
         const destination = path.join(directory, 'catalog.json');

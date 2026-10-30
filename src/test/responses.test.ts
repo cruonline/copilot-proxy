@@ -123,6 +123,8 @@ describe('Recovered Codex Responses compatibility', () => {
         };
         const response = await fetch(base + '/responses', { method: 'POST', body: JSON.stringify({ input: 'Edit', tools }) });
         const output = (await response.json() as { output: Record<string, unknown>[] }).output;
+        expect(output[0].id).to.match(/^fc_/);
+        expect(output[1].id).to.match(/^ctc_/);
         expect(output[1]).to.include({ type: 'custom_tool_call', call_id: 'patch-id', namespace: 'functions', name: 'apply_patch', input: '*** Begin Patch\n*** End Patch' });
         const turn = normalize({ input: [{ role: 'user', content: 'Edit' }, ...output,
             { type: 'function_call_output', call_id: 'read-id', output: 'before' },

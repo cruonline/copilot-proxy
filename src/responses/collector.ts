@@ -59,6 +59,7 @@ export class Collector {
         }> => i.kind === 'tool' && i.index === e.index);
         const added = !item;
         if (!item) {
+            // Function and custom tool calls have distinct Responses item IDs.
             item = { kind: 'tool', id: 'fc_' + randomUUID().replaceAll('-', ''), callId: e.id ?? 'call_' + randomUUID().replaceAll('-', ''), name: '', arguments: '', custom: false, index: e.index };
             this.output.push(item);
         }
@@ -67,6 +68,7 @@ export class Collector {
         if (e.name)
             item.name += e.name;
         item.custom = this.turn.tools.find(t => t.name === item.name)?.custom ?? false;
+        if (item.custom && item.id.startsWith('fc_')) item.id = 'ctc_' + item.id.slice(3);
         item.arguments += e.arguments ?? '';
         return { item, added, delta: e.arguments ?? '' };
     }

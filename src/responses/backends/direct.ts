@@ -10,7 +10,7 @@ export type Fetch = typeof fetch;
 const allowedCopilot = new Set(['api.githubcopilot.com', 'api.individual.githubcopilot.com', 'api.business.githubcopilot.com', 'api.enterprise.githubcopilot.com']);
 export function approvedURL(value: string, github = false): URL {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || url.port || url.username || url.password || url.hash || url.search || (github ? url.hostname !== 'api.github.com' : !allowedCopilot.has(url.hostname)))
+    if (url.protocol !== 'https:' || url.port || url.username || url.password || url.hash || url.search || (github ? !(url.hostname === 'api.github.com' || /^api\.[a-z0-9-]+\.ghe\.com$/.test(url.hostname)) : !(allowedCopilot.has(url.hostname) || /^copilot-api\.[a-z0-9-]+\.ghe\.com$/.test(url.hostname))))
         throw new ProxyError(502, 'Unapproved upstream origin.', 'upstream_error');
     return url;
 }
@@ -24,7 +24,7 @@ export class CopilotAuth {
     private cached?: Token;
     private refreshing?: Promise<Token>;
     private epoch = 0;
-    constructor(private session: () => Promise<string>, private request: Fetch = fetch, private onSecrets: (values: string[]) => void = () => { }, private versions = { editor: '1.143.1', plugin: 'unknown' }, private accountType:()=>string=()=> 'auto') { }
+    constructor(private session: () => Promise<string>, private request: Fetch = fetch, private onSecrets: (values: string[]) => void = () => { }, private versions = { editor: '1.143.1', plugin: 'unknown' }, private accountType:()=>string=()=> 'auto', private githubApi:()=>string=()=> 'https://api.github.com') { }
     clear(): void { this.epoch++; this.cached = undefined; this.refreshing = undefined; this.onSecrets([]); }
     async get(signal: AbortSignal, force = false): Promise<Token> {
         checkAbort(signal);
@@ -50,7 +50,7 @@ export class CopilotAuth {
         if (!githubToken)
             throw new ProxyError(401, 'Sign in to GitHub using Copilot Gateway: Setup and Authorize.', 'authentication_error');
         this.onSecrets([githubToken]);
-        const response = await this.request(approvedURL('https://api.github.com/copilot_internal/v2/token', true), { signal, redirect: 'error', headers: { Authorization: `token ${githubToken}`, 'Accept': 'application/json', 'User-Agent': 'CopilotGateway/0.0.18', 'Editor-Version': `vscode/${this.versions.editor}`, 'Editor-Plugin-Version': `copilot-chat/${this.versions.plugin}` } });
+        const response = await this.request(approvedURL(this.githubApi() + '/copilot_internal/v2/token', true), { signal, redirect: 'error', headers: { Authorization: `token ${githubToken}`, 'Accept': 'application/json', 'User-Agent': 'CopilotGateway/0.0.18', 'Editor-Version': `vscode/${this.versions.editor}`, 'Editor-Plugin-Version': `copilot-chat/${this.versions.plugin}` } });
         if (!response.ok)
             throw new ProxyError(response.status === 401 ? 401 : response.status === 403 ? 403 : 502, 'Copilot token exchange failed. Check GitHub sign-in and subscription access.', 'authentication_error');
         const data = object(await response.json());
@@ -68,7 +68,7 @@ export class CopilotAuth {
     async usage(signal:AbortSignal):Promise<unknown>{
         const githubToken=await this.session();if(!githubToken)throw new ProxyError(401,'Sign in to GitHub before requesting quota information.','authentication_error');
         this.onSecrets([githubToken,...(this.cached?[this.cached.value]:[])]);
-        const response=await this.request(approvedURL('https://api.github.com/copilot_internal/user',true),{signal,redirect:'error',headers:{Authorization:`token ${githubToken}`,Accept:'application/json','User-Agent':'CopilotGateway/0.0.18'}});
+        const response=await this.request(approvedURL(this.githubApi() + '/copilot_internal/user',true),{signal,redirect:'error',headers:{Authorization:`token ${githubToken}`,Accept:'application/json','User-Agent':'CopilotGateway/0.0.18'}});
         if(!response.ok)throw new ProxyError(response.status,`GitHub quota API returned ${response.status}.`,'upstream_error');
         return response.json();
     }
@@ -119,6 +119,7 @@ export class DirectBackend implements Backend {
                 continue;
             }
             if (!response.ok && !allowErrors) {
+                let detail = '';
                 if (response.status === 400 && response.body) {
                     // Read only a bounded diagnostic; errorInfo exposes recognized
                     // validation errors and keeps arbitrary provider content private.
@@ -136,11 +137,12 @@ export class DirectBackend implements Backend {
                     if (size < 65536) {
                         const rejection = errorInfo(new Error(Buffer.concat(chunks).toString('utf8')));
                         if (rejection.status === 400) throw rejection;
+                        detail = Buffer.concat(chunks).toString('utf8').replace(/\s+/g, ' ').slice(0, 300);
                     }
                 }
                 await response.body?.cancel();
                 const status = [401, 403, 404, 429].includes(response.status) ? response.status : 502;
-                throw new ProxyError(status, `Copilot returned HTTP ${response.status}. Check model availability, permissions and quota.`, status === 429 ? 'rate_limit_error' : 'upstream_error');
+                throw new ProxyError(status, `Copilot returned HTTP ${response.status}. Check model availability, permissions and quota.${detail ? " Upstream: " + detail : ""}`, status === 429 ? 'rate_limit_error' : 'upstream_error');
             }
             return response;
         }
@@ -151,12 +153,38 @@ export class DirectBackend implements Backend {
         const body = object(await response.json());
         if (!Array.isArray(body.data))
             throw new ProxyError(502, 'Invalid upstream model catalog.', 'upstream_error');
-        this.catalog=body.data.filter((m: any) => m && typeof m.id === 'string').map((m: any) => ({ id: m.id, name: typeof m.name === 'string' ? m.name : m.id,family:typeof m.family==='string'?m.family:undefined,kind:['embedding','embeddings'].includes(m.capabilities?.type)?'embedding':'chat',endpoints:Array.isArray(m.supported_endpoints)?m.supported_endpoints.filter((p:unknown)=>typeof p==='string'):undefined,upstream:m, ...(Number.isSafeInteger(m.capabilities?.limits?.max_prompt_tokens) && m.capabilities.limits.max_prompt_tokens > 0 ? { contextWindow: m.capabilities.limits.max_prompt_tokens } : {}), access: 'authorized', capabilities: { images: typeof m.capabilities?.supports?.vision === 'boolean' ? m.capabilities.supports.vision : 'unknown', tools: typeof m.capabilities?.supports?.tool_calls === 'boolean' ? m.capabilities.supports.tool_calls : 'unknown', generationControls: true, usage: 'upstream' } }));
+        this.catalog=body.data.filter((m: any) => m && typeof m.id === 'string').map((m: any) => ({ id: m.id, name: typeof m.name === 'string' ? m.name : m.id,family:typeof m.family==='string'?m.family:undefined,kind:['embedding','embeddings'].includes(m.capabilities?.type)?'embedding':'chat',endpoints:Array.isArray(m.supported_endpoints)?m.supported_endpoints.filter((p:unknown)=>typeof p==='string'):undefined,upstream:m,reasoningEfforts:Array.isArray(m.capabilities?.supports?.reasoning_effort)?m.capabilities.supports.reasoning_effort.filter((e:unknown)=>typeof e==='string'):undefined, ...(Number.isSafeInteger(m.capabilities?.limits?.max_prompt_tokens) && m.capabilities.limits.max_prompt_tokens > 0 ? { contextWindow: m.capabilities.limits.max_prompt_tokens } : {}), access: 'authorized', capabilities: { images: typeof m.capabilities?.supports?.vision === 'boolean' ? m.capabilities.supports.vision : 'unknown', tools: typeof m.capabilities?.supports?.tool_calls === 'boolean' ? m.capabilities.supports.tool_calls : 'unknown', generationControls: true, usage: 'upstream' } }));
         return this.catalog!;
+    }
+    /** Drop an effort the upstream model does not list; Copilot rejects it with HTTP 400. */
+    private supportedEffort(modelId: unknown, effort: unknown): boolean {
+        const list = this.catalog?.find(m => m.id === modelId)?.reasoningEfforts;
+        return typeof effort !== 'string' || !list || !list.length || list.includes(effort);
+    }
+    private sanitizeNativeBody(body: unknown): unknown {
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+        const b = { ...(body as Record<string, any>) };
+        if (!this.supportedEffort(b.model, b.reasoning_effort)) delete b.reasoning_effort;
+        if (b.reasoning && typeof b.reasoning === 'object' && !this.supportedEffort(b.model, b.reasoning.effort)) {
+            const { effort: _dropped, ...rest } = b.reasoning;
+            if (Object.keys(rest).length) b.reasoning = rest; else delete b.reasoning;
+        }
+        // Prefixes describe the item type, not the model family. In particular,
+        // freeform apply_patch is a custom tool call, not a function call.
+        if (Array.isArray(b.input)) {
+            b.input = b.input.map((item: any) => {
+                if (!item || typeof item !== 'object' || typeof item.id !== 'string') return item;
+                const prefix = item.type === 'custom_tool_call' ? 'ctc_' : item.type === 'function_call' ? 'fc_' : undefined;
+                if (!prefix || !/^(fc_|ctc_)/.test(item.id)) return item;
+                return { ...item, id: prefix + item.id.replace(/^(fc_|ctc_)/, '') };
+            });
+        }
+        return b;
     }
     /** Ritesh-style upstream forwarding, extended to native Responses/Messages. */
     async nativeRequest(path:string,body:unknown,signal:AbortSignal,headers:Record<string,string>={},method='POST'):Promise<Response>{
         if(!/^\/(?:chat\/completions|responses(?:\/(?:compact|[A-Za-z0-9_-]{1,256}))?|messages(?:\/count_tokens)?|embeddings|completions|models(?:\/[A-Za-z0-9_.-]{1,256})?)$/.test(path))throw new ProxyError(400,'Unsupported native upstream path.');
+        if(path==='/chat/completions'||path==='/responses')body=this.sanitizeNativeBody(body);
         if(path==='/chat/completions'&&body&&typeof body==='object')body=prepareChatBody(body as Record<string,unknown>);
         return this.fetch(path,signal,{method,headers,...(body===undefined?{}:{body:JSON.stringify(body)})},true);
     }
@@ -170,13 +198,17 @@ export class DirectBackend implements Backend {
         yield* unwrapClaudeEvents(this.chatRaw(adapted.turn, signal), adapted.wrapped);
     }
     private async *chatRaw(turn: Turn, signal: AbortSignal): AsyncGenerator<InferenceEvent> {
-        const model=this.catalog?.find(m=>m.id===turn.model);
+        const model=this.catalog?.find(m=>m.id===turn.model);if(turn.reasoningEffort&&!this.supportedEffort(turn.model,turn.reasoningEffort))turn={...turn,reasoningEffort:undefined};
         if (model?.endpoints?.includes('/messages') && !model.endpoints.includes('/chat/completions') && !model.endpoints.includes('/responses')) {
             const response = await this.fetch('/messages', signal, { method: 'POST', body: JSON.stringify(messagesRequest(turn)) });
             yield* messagesEvents(response, signal); return;
         }
         if(model?.endpoints?.includes('/responses')&&!model.endpoints.includes('/chat/completions')){
-            const response=await this.fetch('/responses',signal,{method:'POST',body:JSON.stringify(responseRequest(turn))});yield* responseEvents(response,signal);return;
+            // The Responses bridge is the normal Direct-mode path for GPT and
+            // Claude models. Normalize prior gateway output IDs here too; the
+            // nativeRequest helper is not involved in this path.
+            const request = this.sanitizeNativeBody(responseRequest(turn));
+            const response=await this.fetch('/responses',signal,{method:'POST',body:JSON.stringify(request)});yield* responseEvents(response,signal);return;
         }
         const response = await this.fetch('/chat/completions', signal, { method: 'POST', body: JSON.stringify(prepareChatBody(upstreamBody(turn))) });
         if (!response.body)

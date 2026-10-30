@@ -4,7 +4,7 @@
   "publisher": "local-copilot",
   "description": "Independent local Copilot gateway for Codex Responses, OpenAI clients, and Claude Desktop.",
   "icon": "images/icon.png",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "repository": {
     "type": "git",
     "url": "https://github.com/cruonline/copilot-proxy"
@@ -21,6 +21,10 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "copilot-gateway.switchBackend",
+        "title": "Copilot Gateway: Switch Backend Mode"
+      },
       {
         "command": "copilot-gateway.exportCodexCatalog",
         "title": "Copilot Gateway: Export Codex Model Catalog"
@@ -60,7 +64,28 @@
             "direct"
           ],
           "default": "vscode",
+          "enumItemLabels": [
+            "VS Code (public API)",
+            "Direct (native Copilot, reasoning levels)"
+          ],
+          "enumDescriptions": [
+            "Uses the public VS Code model adapter. Reasoning effort is locked to the default.",
+            "Forwards natively to Copilot. Enables reasoning levels and native compaction; requires GitHub authorization."
+          ],
           "description": "Responses transport: public VS Code model adapter, or opt-in native Copilot forwarding for reasoning history and compaction. Native endpoint support depends on your Copilot model/account."
+        },
+        "copilotGateway.githubAuthProvider": {
+          "type": "string",
+          "enum": [
+            "github",
+            "github-enterprise"
+          ],
+          "enumItemLabels": [
+            "GitHub.com",
+            "GitHub Enterprise (GHE.com)"
+          ],
+          "default": "github",
+          "description": "Account used for Direct mode sign-in. For GitHub Enterprise Cloud with data residency, also set github-enterprise.uri (for example https://yourorg.ghe.com)."
         },
         "copilotGateway.port": {
           "type": "number",

@@ -60,13 +60,22 @@ function syncCodexCatalog(): Promise<void> {
 
 let directResponses: DirectBackend | undefined;
 let directSecrets: string[] = [];
+function githubProviderId(): string {
+    return vscode.workspace.getConfiguration('copilotGateway').get<string>('githubAuthProvider', 'github') === 'github-enterprise' ? 'github-enterprise' : 'github';
+}
+function githubApiBase(): string {
+    if (githubProviderId() !== 'github-enterprise') return 'https://api.github.com';
+    const ghe = vscode.workspace.getConfiguration('github-enterprise');
+    const uri = (ghe.get<string>('uri', '') || ghe.get<string[]>('uris', [])[0] || '').trim();
+    try { return 'https://api.' + new URL(uri).hostname; } catch { return 'https://api.github.com'; }
+}
 function getDirectResponses(): DirectBackend {
     if (!directResponses) {
         const versions = { editor: vscode.version, plugin: vscode.extensions.getExtension('GitHub.copilot-chat')?.packageJSON.version || 'unknown' };
         const auth = new CopilotAuth(async () => {
-            const session = await vscode.authentication.getSession('github', ['read:user'], { silent: true });
+            const session = await vscode.authentication.getSession(githubProviderId(), ['read:user'], { silent: true });
             return session?.accessToken || '';
-        }, fetch, values => { directSecrets = values; }, versions);
+        }, fetch, values => { directSecrets = values; }, versions, undefined, githubApiBase);
         directResponses = new DirectBackend(auth, fetch, versions);
     }
     return directResponses;
@@ -2143,6 +2152,20 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                     </select>
                 </div>
                 <div class="setting-item">
+                    <label class="setting-label" for="backendInput">Responses Backend</label>
+                    <select id="backendInput" class="setting-select">
+                        <option value="vscode" ${settings.responsesBackend !== 'direct' ? 'selected' : ''}>VS Code (public API)</option>
+                        <option value="direct" ${settings.responsesBackend === 'direct' ? 'selected' : ''}>Direct (reasoning levels)</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label" for="authProviderInput">GitHub Account Type</label>
+                    <select id="authProviderInput" class="setting-select">
+                        <option value="github" ${settings.githubAuthProvider !== 'github-enterprise' ? 'selected' : ''}>GitHub.com</option>
+                        <option value="github-enterprise" ${settings.githubAuthProvider === 'github-enterprise' ? 'selected' : ''}>GitHub Enterprise (GHE.com)</option>
+                    </select>
+                </div>
+                <div class="setting-item">
                     <label class="setting-label" for="logRequestsInput">Log Requests to UI</label>
                     <input type="checkbox" id="logRequestsInput" class="setting-checkbox" ${settings.logRequestsToUI ? 'checked' : ''} />
                 </div>
@@ -2612,12 +2635,233 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             background: rgba(244, 67, 54, 0.1);
         }
         ${connectionGuideStyles}
+
+        /* Gateway workbench: let VS Code supply the theme; use its surfaces as hierarchy. */
+        :root {
+            --gw-surface: var(--vscode-sideBar-background, var(--vscode-editor-background));
+            --gw-raised: var(--vscode-editor-inactiveSelectionBackground, var(--vscode-editor-background));
+            --gw-line: var(--vscode-widget-border, var(--vscode-panel-border, rgba(128, 128, 128, .35)));
+            --gw-muted: var(--vscode-descriptionForeground);
+            --gw-accent: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+        }
+        html { scroll-behavior: smooth; }
+        body {
+            padding: clamp(16px, 3vw, 36px);
+            line-height: 1.55;
+        }
+        .container { max-width: 1160px; }
+        .header {
+            margin-bottom: 20px;
+            padding-bottom: 14px;
+            border-bottom-color: var(--gw-line);
+        }
+        .title {
+            font-size: clamp(1.25rem, 2vw, 1.65rem);
+            letter-spacing: -.035em;
+        }
+        .guide-tabs {
+            gap: 2px;
+            margin: 0 0 24px;
+            border-bottom-color: var(--gw-line);
+        }
+        .guide-tab {
+            min-height: 42px;
+            padding: 10px 16px;
+            border-bottom-width: 2px;
+            color: var(--gw-muted);
+            transition: color 120ms ease, background-color 120ms ease;
+        }
+        .guide-tab[aria-selected="true"] {
+            color: var(--vscode-foreground);
+            border-bottom-color: var(--gw-accent);
+        }
+        .guide-tab:hover, .guide-client-choice:hover {
+            color: var(--vscode-foreground);
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        :where(button, input, select, [tabindex="0"]):focus-visible {
+            outline: 2px solid var(--gw-accent);
+            outline-offset: 2px;
+        }
+        button, input, select { font: inherit; }
+        button { min-height: 36px; }
+        .main-layout {
+            display: grid;
+            grid-template-columns: minmax(240px, .82fr) minmax(0, 1.55fr);
+            gap: 28px;
+            align-items: start;
+        }
+        .left-column, .right-column { min-width: 0; }
+        .section {
+            margin: 0 0 22px;
+            padding: 18px;
+            border: 1px solid var(--gw-line);
+            border-radius: 8px;
+            background: color-mix(in srgb, var(--gw-surface) 72%, transparent);
+        }
+        .section-header {
+            margin-bottom: 14px;
+            min-height: 28px;
+            font-size: 1rem;
+            letter-spacing: -.01em;
+        }
+        .model-card {
+            margin: 0 0 9px;
+            padding: 14px;
+            border: 1px solid var(--gw-line);
+            border-left: 3px solid var(--gw-accent);
+            border-radius: 5px;
+            background: var(--gw-raised);
+        }
+        .model-card:last-child { margin-bottom: 0; }
+        .model-name { margin-bottom: 5px; font-size: 1rem; }
+        .model-meta, .model-details { line-height: 1.6; }
+        .model-id, .setting-value, .setting-input, .setting-select,
+        .endpoint code, .logs-table .log-time, .logs-table .log-num,
+        .logs-table .log-duration, .stats-table .stats-value {
+            font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+        }
+        .status-row {
+            position: relative;
+            gap: 18px;
+            min-height: 78px;
+            margin: 0 0 24px;
+            padding: 16px 18px 16px 20px;
+            border: 1px solid var(--gw-line);
+            border-left: 3px solid ${isRunning ? 'var(--vscode-testing-iconPassed, #73c991)' : 'var(--gw-line)'};
+            border-radius: 8px;
+            background: var(--gw-raised);
+        }
+        .status-indicator { gap: 11px; }
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            flex: 0 0 9px;
+            box-shadow: 0 0 0 4px color-mix(in srgb, ${isRunning ? 'var(--vscode-testing-iconPassed, #73c991)' : 'var(--gw-muted)'} 17%, transparent);
+        }
+        .status-text { font-size: 1.05rem; font-weight: 600; }
+        .action-btn, .secondary-btn {
+            min-height: 36px;
+            padding: 7px 13px;
+            border: 1px solid transparent;
+            border-radius: 5px;
+            font-size: 13px;
+            transition: background-color 120ms ease, border-color 120ms ease;
+        }
+        .action-btn { font-weight: 600; }
+        .secondary-btn {
+            border-color: var(--gw-line);
+            background: transparent;
+            color: var(--vscode-foreground);
+        }
+        .secondary-btn:hover { background: var(--vscode-toolbar-hoverBackground); }
+        .settings-grid { gap: 0; }
+        .setting-item {
+            gap: 12px;
+            min-height: 44px;
+            padding: 7px 0;
+            border-bottom: 1px solid color-mix(in srgb, var(--gw-line) 65%, transparent);
+            border-radius: 0;
+            background: transparent;
+        }
+        .setting-item:last-child { border-bottom: 0; }
+        .setting-label { color: var(--vscode-foreground); }
+        .setting-select { max-width: 62%; }
+        .setting-input, .setting-select, .api-key-input {
+            min-height: 36px;
+            border-radius: 4px;
+        }
+        .api-key-input { margin: 6px 0 8px; }
+        #apiKeyHelp { margin: 0 0 12px; color: var(--gw-muted); }
+        .api-key-actions { gap: 8px; }
+        #apiKeyStatus { min-height: 1.5em; margin-top: 6px; }
+        .endpoints { gap: 7px; }
+        .endpoint {
+            min-height: 48px;
+            gap: 10px;
+            padding: 7px 9px;
+            border: 1px solid var(--gw-line);
+            border-radius: 5px;
+            background: var(--gw-raised);
+        }
+        .endpoint code {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            font-size: .88em;
+        }
+        .method { min-width: 44px; font-size: 11px; }
+        .method.post { background: var(--vscode-testing-iconPassed, #267f50); }
+        .method.get { background: var(--vscode-textLink-foreground, #1264a3); }
+        .copy-btn, .refresh-btn {
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            border: 1px solid transparent;
+        }
+        .copy-btn:hover, .refresh-btn:hover {
+            background: var(--vscode-toolbar-hoverBackground);
+            opacity: 1;
+        }
+        .stats-table, .logs-table-container {
+            border: 1px solid var(--gw-line);
+            border-radius: 5px;
+            background: var(--gw-raised);
+        }
+        .stats-table th, .stats-table td { padding: 8px 10px; }
+        .stats-table th { background: var(--gw-surface); }
+        .stats-table .stats-value { font-variant-numeric: tabular-nums; }
+        .logs-section { margin-top: 0; }
+        .logs-table-container { max-height: max(260px, calc(100vh - 230px)); }
+        .logs-table { min-width: 760px; }
+        .logs-table th, .logs-table td { padding: 9px 10px; }
+        .logs-table th { background: var(--gw-surface); }
+        .logs-table tbody tr:hover { background: var(--vscode-list-hoverBackground); }
+        .empty-state {
+            padding: 28px 18px;
+            border: 1px dashed var(--gw-line);
+            border-radius: 5px;
+            line-height: 1.6;
+        }
+        .api-badge.api-openai {
+            background: color-mix(in srgb, var(--vscode-testing-iconPassed, #10a37f) 18%, transparent);
+            color: var(--vscode-testing-iconPassed, #10a37f);
+        }
+        .api-badge.api-anthropic {
+            background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cc783a) 18%, transparent);
+            color: var(--vscode-editorWarning-foreground, #cc783a);
+        }
+        @media (max-width: 760px) {
+            body { padding: 16px; }
+            .main-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+        }
+        @media (max-width: 480px) {
+            body { padding: 12px; }
+            .header { align-items: flex-start; gap: 12px; }
+            .title { max-width: 65%; }
+            .guide-tab { padding: 9px 10px; font-size: .92em; }
+            .status-row { align-items: flex-start; flex-direction: column; }
+            .status-indicator { min-height: 32px; }
+            .action-btn { width: 100%; }
+            .section { padding: 14px; }
+            .setting-item { align-items: center; }
+            .setting-label { flex: 1; }
+            .setting-select { max-width: 58%; min-width: 0; }
+            .setting-input:not(.api-key-input) { width: 72px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                scroll-behavior: auto !important;
+                animation-duration: .01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .01ms !important;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1 class="title">Copilot Gateway</h1>
+            <h1 class="title">Copilot Gateway v${escapeHtml(extensionContext?.extension.packageJSON.version ?? 'unknown')}</h1>
             <button class="secondary-btn" id="logsBtn">Output logs</button>
         </div>
 
@@ -2628,6 +2872,13 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             <button id="tab-clients" class="guide-tab" role="tab" data-guide-tab="clients" aria-selected="false" aria-controls="panel-clients" tabindex="-1">Client setup</button>
         </nav>
         <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="status-row" role="status" aria-live="polite">
+            <div class="status-indicator">
+                <div class="status-dot" aria-hidden="true"></div>
+                <span class="status-text">${statusText}</span>
+            </div>
+            <button class="action-btn" id="actionBtn">${buttonText}</button>
+        </div>
         <div class="main-layout">
             <div class="left-column">
                 <div class="section">
@@ -2662,14 +2913,6 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                         <button class="secondary-btn" id="generateApiKeyBtn">Generate New Key</button>
                     </div>
                     <p id="apiKeyStatus" role="status" aria-live="polite"></p>
-                </div>
-
-                <div class="status-row">
-                    <div class="status-indicator">
-                        <div class="status-dot"></div>
-                        <span class="status-text">${statusText}</span>
-                    </div>
-                    <button class="action-btn" id="actionBtn">${buttonText}</button>
                 </div>
 
                 ${endpoints}
@@ -2768,7 +3011,11 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             });
         }
 
-        const rawLoggingInput = document.getElementById('rawLoggingInput');
+        const backendInput = document.getElementById('backendInput');
+if (backendInput) backendInput.addEventListener('change', (e) => vscode.postMessage({ command: 'updateSetting', key: 'responsesBackend', value: e.target.value }));
+const authProviderInput = document.getElementById('authProviderInput');
+if (authProviderInput) authProviderInput.addEventListener('change', (e) => vscode.postMessage({ command: 'updateSetting', key: 'githubAuthProvider', value: e.target.value }));
+const rawLoggingInput = document.getElementById('rawLoggingInput');
         if (rawLoggingInput) {
             rawLoggingInput.addEventListener('change', (e) => {
                 vscode.postMessage({ command: 'updateSetting', key: 'rawLogging', value: e.target.checked });
@@ -2990,7 +3237,7 @@ async function showStatus(): Promise<void> {
                 await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
                 log(`Setting updated: ${message.key} = ${message.value}`);
                 // Connection examples follow the selected port and default model.
-                if (['logRequestsToUI', 'port', 'defaultModel'].includes(message.key)) {
+                if (['logRequestsToUI', 'port', 'defaultModel', 'responsesBackend', 'githubAuthProvider'].includes(message.key)) {
                     updateStatusPanel();
                 }
                 break;
@@ -3044,7 +3291,9 @@ function updateStatusPanel(): void {
         autoStart,
         defaultModel,
         logRequestsToUI,
-        rawLogging
+        rawLogging,
+        responsesBackend: config.get<string>('responsesBackend', 'vscode'),
+        githubAuthProvider: config.get<string>('githubAuthProvider', 'github')
     };
 
     statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings, logRequestsToUI ? requestLogs : [], sessionStats, lifetimeStats);
@@ -3053,7 +3302,7 @@ function updateStatusPanel(): void {
 export function activate(context: vscode.ExtensionContext): void {
     if (vscode.authentication?.onDidChangeSessions) {
         context.subscriptions.push(vscode.authentication.onDidChangeSessions(event => {
-            if (event.provider.id === 'github') {
+            if (event.provider.id === 'github' || event.provider.id === 'github-enterprise') {
                 directResponses?.dispose();
                 directResponses = undefined;
                 directSecrets = [];
@@ -3106,8 +3355,20 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('copilot-gateway.status', showStatus),
         vscode.commands.registerCommand('copilot-gateway.setupClaudeGateway', () => configureClaudeDesktop()),
         vscode.commands.registerCommand('copilot-gateway.restoreClaudeGateway', () => configureClaudeDesktop(true)),
+        vscode.commands.registerCommand('copilot-gateway.switchBackend', async () => {
+            const config = vscode.workspace.getConfiguration('copilotGateway');
+            const current = config.get<string>('responsesBackend', 'vscode');
+            const pick = await vscode.window.showQuickPick([
+                { label: 'VS Code (public API)', description: current === 'vscode' ? 'current' : '', value: 'vscode' },
+                { label: 'Direct (native Copilot, reasoning levels)', description: current === 'direct' ? 'current' : '', value: 'direct' }
+            ], { title: 'Copilot Gateway: Responses backend' });
+            if (!pick || pick.value === current) return;
+            await config.update('responsesBackend', pick.value, vscode.ConfigurationTarget.Global);
+            if (pick.value === 'direct') await vscode.authentication.getSession(githubProviderId(), ['read:user'], { createIfNone: true });
+            vscode.window.showInformationMessage('Backend set to ' + pick.value + '. Codex catalog updates automatically; restart Codex to reload it.');
+        }),
         vscode.commands.registerCommand('copilot-gateway.authorizeDirectResponses', async () => {
-            await vscode.authentication.getSession('github', ['read:user'], { createIfNone: true });
+            await vscode.authentication.getSession(githubProviderId(), ['read:user'], { createIfNone: true });
             vscode.window.showInformationMessage('GitHub session authorized. Set copilotGateway.responsesBackend to direct to use native Responses.');
         }),
         vscode.commands.registerCommand('copilot-gateway.exportCodexCatalog', async () => {
@@ -3133,8 +3394,9 @@ export function activate(context: vscode.ExtensionContext): void {
         context.subscriptions.push({ dispose: () => { if (catalogTimer) clearInterval(catalogTimer); catalogTimer = undefined; } });
         void refreshModels();
         if (vscode.workspace.onDidChangeConfiguration) context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-            if (event.affectsConfiguration('copilotGateway.responsesBackend') || event.affectsConfiguration('copilotGateway.codexCatalogPath'))
-                void refreshModels();
+            if (event.affectsConfiguration('copilotGateway')) updateStatusPanel();
+            if (event.affectsConfiguration('copilotGateway.responsesBackend') || event.affectsConfiguration('copilotGateway.githubAuthProvider') || event.affectsConfiguration('copilotGateway.codexCatalogPath'))
+                { if (event.affectsConfiguration('copilotGateway.githubAuthProvider')) { directResponses?.dispose(); directResponses = undefined; directSecrets = []; } void refreshModels(); }
         }));
     }
 

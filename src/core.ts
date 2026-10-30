@@ -348,6 +348,8 @@ export interface SettingsInfo {
     defaultModel: string;
     logRequestsToUI: boolean;
     rawLogging: boolean;
+    responsesBackend: string;
+    githubAuthProvider: string;
 }
 
 export interface RequestLogEntry {
