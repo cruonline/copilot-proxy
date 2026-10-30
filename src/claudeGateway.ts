@@ -48,10 +48,14 @@ export async function getClaudeGatewayDirectories(system = process.platform, hom
     return [...(legacyExists || !packages.length ? [legacy] : []), ...packages];
 }
 
-export async function setupClaudeGateway(dir: string, baseUrl: string, apiKey: string, model: string): Promise<void> {
+export interface ClaudeGatewayModel { name: string; labelOverride: string }
+
+export async function setupClaudeGateway(dir: string, baseUrl: string, apiKey: string, model: string | ClaudeGatewayModel[]): Promise<void> {
     const url = new URL(baseUrl);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid gateway URL');
-    if (!apiKey.trim() || !model.trim()) throw new Error('A saved key and model ID are required');
+    const models = typeof model === 'string' ? [{ name: model, labelOverride: model }] : model;
+    if (!apiKey.trim() || !models.length || models.length > 3 || models.some(item => !item.name?.trim() || !item.labelOverride?.trim()) ||
+        new Set(models.map(item => item.name)).size !== models.length) throw new Error('A saved key and one to three distinct models with labels are required');
     const current: Snapshot = {};
     for (const name of files) current[name] = await readOptional(path.join(dir, name));
     // Parse everything before modifying files; malformed configurations are never overwritten.
@@ -68,8 +72,8 @@ export async function setupClaudeGateway(dir: string, baseUrl: string, apiKey: s
         { ...gateway, inferenceProvider: 'gateway', inferenceCredentialKind: 'static',
             inferenceGatewayApiKey: apiKey, inferenceGatewayAuthScheme: 'bearer',
             inferenceGatewayBaseUrl: baseUrl.replace(/\/+$/, '') + '/',
-            inferenceModels: [{ name: model, labelOverride: model }] },
-        { ...meta, appliedId: GATEWAY_ID, entries: [...entries.filter(entry => entry.id !== GATEWAY_ID), { id: GATEWAY_ID, name: model }] }
+            inferenceModels: models.map(item => ({ name: item.name, labelOverride: item.labelOverride })) },
+        { ...meta, appliedId: GATEWAY_ID, entries: [...entries.filter(entry => entry.id !== GATEWAY_ID), { id: GATEWAY_ID, name: models.map(item => item.labelOverride).join(', ') }] }
     ];
     try {
         for (let i = 0; i < files.length; i++) await write(path.join(dir, files[i]), JSON.stringify(updates[i], null, 2) + '\n');

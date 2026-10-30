@@ -1,7 +1,17 @@
 {
-  "directory": "C:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-SBkBQk",
+  "directory": "C:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-EiKdlc",
   "code": 0,
   "steps": 3,
+  "catalogRequests": 2,
+  "picker": {
+    "urlModelIds": [
+      "fixture-model"
+    ],
+    "fileModelIds": [
+      "fixture-model"
+    ],
+    "fileModelSelectable": true
+  },
   "content": "after\n",
   "observed": [
     {
@@ -122,6 +132,6 @@
       ]
     }
   ],
-  "output": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"C:\\\\Users\\\\pseku\\\\AppData\\\\Local\\\\Temp\\\\\" (codex_home: AbsolutePathBuf(\"C:\\\\Users\\\\pseku\\\\AppData\\\\Local\\\\Temp\\\\copilot-gateway-codex-SBkBQk\\\\codex-home\"))\nReading additional input from stdin...\n2026-10-30T10:48:30.020511Z  WARN codex_core::shell_snapshot: Failed to create shell snapshot for powershell: Shell snapshot not supported yet for PowerShell\n2026-10-30T10:48:30.212810Z  WARN codex_models_manager::model_info: Unknown model gpt-5.6-luna is used. This will use fallback model metadata.\n2026-10-30T10:48:30.219974Z  WARN codex_core_plugins::manager: failed to warm featured plugin ids cache error=remote featured plugin request to https://chatgpt.com/backend-api/plugins/featured?platform=codex failed with status 401 Unauthorized: {\"detail\":\"Unauthorized\"}\nOpenAI Codex v0.166.0-alpha.5.1\n--------\nworkdir: C:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-SBkBQk\nmodel: fixture-model\nprovider: copilot_gateway\napproval: never\nsandbox: danger-full-access\nreasoning effort: none\nreasoning summaries: none\nsession id: 01a18c6c-e82c-73b2-be54-135ce5c45d69\n--------\nuser\nRead fixture.txt, use apply_patch to change before to after, and report completion. This is an isolated integration-test workspace.\nexec\n\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Get-Content -LiteralPath 'fixture.txt'\" in C:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-SBkBQk\n succeeded in 1235ms:\nbefore\r\n\napply patch\npatch: completed\nC:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-SBkBQk\\fixture.txt\ndiff --git a/fixture.txt b/fixture.txt\nindex 90be1f3056c4f471f977a28497b8d4b392c55a02..294186e497a23bf3fbfde12aacc7f720f668fe9a\n--- a/fixture.txt\n+++ b/fixture.txt\n@@ -1 +1 @@\n-before\n+after\n\ncodex\nUpdated fixture.txt from before to after.\ntokens used\n18,001\nUpdated fixture.txt from before to after.\n",
+  "output": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"C:\\\\Users\\\\pseku\\\\AppData\\\\Local\\\\Temp\\\\\" (codex_home: AbsolutePathBuf(\"C:\\\\Users\\\\pseku\\\\AppData\\\\Local\\\\Temp\\\\copilot-gateway-codex-EiKdlc\\\\codex-home\"))\nReading additional input from stdin...\n2026-10-30T17:12:25.515948Z  WARN codex_core::shell_snapshot: Failed to create shell snapshot for powershell: Shell snapshot not supported yet for PowerShell\n2026-10-30T17:12:25.691987Z  WARN codex_core_plugins::manager: failed to warm featured plugin ids cache error=remote featured plugin request to https://chatgpt.com/backend-api/plugins/featured?platform=codex failed with status 401 Unauthorized: {\"detail\":\"Unauthorized\"}\n2026-10-30T17:12:25.729454Z  WARN codex_models_manager::model_info: Unknown model gpt-5.6-luna is used. This will use fallback model metadata.\nOpenAI Codex v0.166.0-alpha.5.1\n--------\nworkdir: C:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-EiKdlc\nmodel: fixture-model\nprovider: copilot_gateway\napproval: never\nsandbox: danger-full-access\nreasoning effort: none\nreasoning summaries: none\nsession id: 01a18dcc-6693-75f2-bf1c-97d8f4ba72ba\n--------\nuser\nRead fixture.txt, use apply_patch to change before to after, and report completion. This is an isolated integration-test workspace.\nexec\n\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Get-Content -LiteralPath 'fixture.txt'\" in C:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-EiKdlc\n succeeded in 2189ms:\nbefore\r\n\napply patch\npatch: completed\nC:\\Users\\pseku\\AppData\\Local\\Temp\\copilot-gateway-codex-EiKdlc\\fixture.txt\ndiff --git a/fixture.txt b/fixture.txt\nindex 90be1f3056c4f471f977a28497b8d4b392c55a02..294186e497a23bf3fbfde12aacc7f720f668fe9a\n--- a/fixture.txt\n+++ b/fixture.txt\n@@ -1 +1 @@\n-before\n+after\n\ncodex\nUpdated fixture.txt from before to after.\ntokens used\n18,001\nUpdated fixture.txt from before to after.\n",
   "success": true
 }

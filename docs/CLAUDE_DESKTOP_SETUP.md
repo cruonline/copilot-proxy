@@ -7,8 +7,8 @@ This extension implements Claude Desktop's third-party gateway configuration bas
 1. Install Claude Desktop and fully quit it, including the tray process.
 2. Open a local VS Code window on the same machine. Sign into Copilot and start Copilot Gateway.
 3. Open **Copilot Gateway: Show Status > Client setup > Claude Desktop > Configure gateway**, or run **Copilot Gateway: Configure Claude Desktop Gateway** from the Command Palette.
-4. Choose an available model. Review the gateway URL, model, and target paths, then apply.
-5. Relaunch Claude Desktop. Select the configured model and send a message. Keep VS Code running.
+4. Choose three distinct available models in order. For each model, enter its dropdown label (the model's readable name is suggested). Claude, GPT, Gemini and other available Copilot models can be mixed. Review all three names, IDs, the gateway URL and target paths, then apply. Cancelling any step writes nothing.
+5. Relaunch Claude Desktop. Its dropdown lists all three configured models using your labels. Select one and send a message. Keep VS Code running. Running the configurator again suggests your last saved choices and labels.
 
 The configured port determines the root gateway URL, for example `http://127.0.0.1:8090/`. Do not append `/v1`: the client sends Anthropic Messages requests. The extension writes the saved key as a static bearer credential, sets `deploymentMode` to `3p`, and supplies `inferenceModels` to avoid relying on model discovery.
 
@@ -37,6 +37,7 @@ The gateway schema is unofficial and may change with Claude Desktop versions. Li
 
 - No models: sign into Copilot, open Copilot Chat, and refresh models before setup.
 - 401: configure the gateway again using the current saved key.
+- Message role errors: update the extension. Desktop instruction roles (`system`, `developer`) are moved to the Anthropic system field; OpenAI tool calls and `tool` results are converted to Anthropic content blocks while retaining their IDs.
 - Connection refused: start the proxy and check its configured port.
 - Gateway absent: fully quit and relaunch Desktop, check the displayed configuration paths, and verify your Desktop version supports this schema.
 - Setup failure: check valid JSON and file permissions. Restore any completed directory before retrying if needed.

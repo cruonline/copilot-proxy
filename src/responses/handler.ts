@@ -7,10 +7,10 @@ import { errorInfo, ProxyError } from './errors';
 import { InferenceEvent, Turn } from './types';
 import { WireStream } from './wire';
 import { forwardNative } from './native';
-import { MAX_REQUEST_BODY_SIZE, REQUEST_TIMEOUT_MS, STREAM_INACTIVITY_TIMEOUT_MS } from '../core';
+import { MAX_REQUEST_BODY_SIZE, REQUEST_TIMEOUT_MS, STREAM_INACTIVITY_TIMEOUT_MS, RequestLogEntry } from '../core';
 
 export type ResponsesInference = (turn: Turn, signal: AbortSignal) => AsyncIterable<InferenceEvent>;
-export type NativeResponses = (path: string, raw: unknown, signal: AbortSignal, method: string) => Promise<Response>;
+export type NativeResponses = (path: string, raw: unknown, signal: AbortSignal, method: string) => Promise<Response | undefined>;
 
 async function body(req: IncomingMessage): Promise<unknown> {
     const chunks: Buffer[] = [];
@@ -41,7 +41,9 @@ async function body(req: IncomingMessage): Promise<unknown> {
 }
 
 /** Authentication/CORS are handled by the existing server before entering this route. */
-export async function handleResponses(req: IncomingMessage, res: ServerResponse, headers: Record<string, string>, infer: ResponsesInference, native?: NativeResponses, sanitize: (text: string) => string = text => text): Promise<void> {
+export async function handleResponses(req: IncomingMessage, res: ServerResponse, headers: Record<string, string>, infer: ResponsesInference, native?: NativeResponses, sanitize: (text: string) => string = text => text, observe: (entry: RequestLogEntry) => void = () => {}): Promise<void> {
+    const started = Date.now();
+    const entry: RequestLogEntry = { id: crypto.randomUUID(), timestamp: new Date(started).toISOString(), method: req.method || 'POST', endpoint: (req.url || '').split('?')[0], model: '(default)', messageCount: 0, inputChars: 0, outputChars: 0, stream: false, durationMs: 0, status: 'error' };
     const controller = new AbortController();
     const cancel = () => { if (!res.writableEnded) controller.abort(new ProxyError(499, 'Client disconnected.', 'cancelled')); };
     res.on('close', cancel);
@@ -55,19 +57,33 @@ export async function handleResponses(req: IncomingMessage, res: ServerResponse,
     let wire: WireStream | undefined;
     try {
         const raw = req.method === 'POST' ? await body(req) : undefined;
+        if (raw && typeof raw === 'object') {
+            const request = raw as Record<string, unknown>;
+            entry.model = typeof request.model === 'string' ? request.model : '(default)';
+            entry.stream = request.stream === true;
+            entry.messageCount = Array.isArray(request.input) ? request.input.length : request.input ? 1 : 0;
+            entry.inputChars = JSON.stringify(request.input ?? '').length + JSON.stringify(request.instructions ?? '').length;
+        }
         const route = (req.url || '').split('?')[0].replace(/^\/v1/, '');
         if (native) {
             const response = await native(route, raw, controller.signal, req.method || 'POST');
-            for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
-            if (response.headers.get('content-type')?.includes('text/event-stream')) reset();
-            await forwardNative(response, res, controller.signal, sanitize, false, 32 * 1024 * 1024, reset);
-            return;
+            if (response) {
+                for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+                if (response.headers.get('content-type')?.includes('text/event-stream')) reset();
+                const observed = await forwardNative(response, res, controller.signal, sanitize, false, 32 * 1024 * 1024, reset);
+                entry.status = observed.failed ? 'error' : 'success';
+                if (observed.failed) entry.errorMessage = observed.errorMessage ?? `Upstream request failed (HTTP ${response.status}).`;
+                entry.outputChars = observed.outputChars ?? 0;
+                return;
+            }
         }
         if (route !== '/responses' || req.method !== 'POST') throw new ProxyError(501, 'Stored Responses and remote compaction require the direct Responses backend. Use complete history and local compaction.', 'unsupported_feature');
         const turn = normalize(raw, 'responses');
         const collector = new Collector(turn);
         if (turn.stream) reset();
         for await (const event of infer(turn, controller.signal)) {
+            entry.model = turn.model;
+            if (event.kind === 'text') entry.outputChars += event.text.length;
             if (controller.signal.aborted) throw controller.signal.reason;
             if (turn.stream) {
                 reset();
@@ -88,21 +104,25 @@ export async function handleResponses(req: IncomingMessage, res: ServerResponse,
             res.writeHead(200, { ...headers, 'Content-Type': 'application/json' });
             res.end(JSON.stringify(collector.json()));
         }
+        entry.status = 'success';
     } catch (error) {
         const failure = errorInfo(controller.signal.aborted ? controller.signal.reason : error);
+        entry.errorMessage = sanitize(failure.message);
         if (!res.destroyed && !res.writableEnded) {
             if (!res.headersSent) {
                 res.writeHead(failure.status === 499 ? 408 : failure.status, { ...headers, 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: { message: failure.message, type: failure.type } }));
+                res.end(JSON.stringify({ error: { message: sanitize(failure.message), type: failure.type } }));
             } else {
                 // The inference signal may already be cancelled; the terminal error must still be writable.
                 if (wire) {
-                    try { await wire.error(failure.message, failure.type, new AbortController().signal); } catch { /* disconnected */ }
+                    try { await wire.error(sanitize(failure.message), failure.type, new AbortController().signal); } catch { /* disconnected */ }
                 }
                 res.end();
             }
         }
     } finally {
+        entry.durationMs = Date.now() - started;
+        if (entry.method === 'POST') observe(entry);
         clearTimeout(timeout);
         controller.abort();
         controller.signal.removeEventListener('abort', abortRequest);

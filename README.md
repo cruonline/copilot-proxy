@@ -87,6 +87,8 @@ The status panel provides:
 - **Start/Stop Button**: Quick toggle for the server
 - **Model List**: All available Copilot models with details (name, ID, vendor, family, max tokens)
 - **Endpoint URLs**: Clickable URLs with copy buttons for easy integration
+- **Request logs tab**: Enable **Log Requests to UI** to view Chat, Anthropic, and Responses requests, including failures and native Responses streams. The selected tab stays open as results arrive.
+- **Automatic Codex catalog**: Use the automatically maintained `model_catalog_json` file for the Codex Desktop picker. The authenticated `/v1/model-catalog` endpoint supports CLI API discovery.
 
 ### Output Logging
 
@@ -243,7 +245,7 @@ claude
 
 Open **Copilot Gateway: Show Status > Client setup > Codex** for a configuration reference using your configured port and model.
 
-Codex connects directly using the Responses API (`wire_api = "responses"`). JSON/SSE, function and custom tool calls, namespaced tools, and freeform `apply_patch` are supported. Run **Copilot Gateway: Export Codex Model Catalog** and use the generated catalog in your Codex configuration. See [the Codex setup guide](docs/CODEX_SETUP.md).
+Codex connects directly using the Responses API (`wire_api = "responses"`). JSON/SSE, function and custom tool calls, namespaced tools, and freeform `apply_patch` are supported. Use the automatically maintained `model_catalog_json` file to populate the Desktop picker; URL-only discovery currently returns an empty app-server model list. CLI clients can use `model_catalog_url` for authenticated API discovery. See [the Codex setup guide](docs/CODEX_SETUP.md).
 
 The default `copilotGateway.responsesBackend = "vscode"` uses public VS Code models with complete history and local compaction. Optional `"direct"` mode forwards native Copilot Responses, including reasoning history, hosted tools, and remote compaction when supported upstream. Run **Copilot Gateway: Authorize Native Codex Responses** before enabling direct mode. Client tools continue to run in Codex.
 

@@ -957,7 +957,35 @@ export function generateAnthropicId(): string {
  */
 export function parseAnthropicRequestBody(body: string): AnthropicRequest | null {
     try {
-        return JSON.parse(body) as AnthropicRequest;
+        const request = JSON.parse(body);
+        if (!request || typeof request !== 'object') return null;
+        // Desktop gateways may send OpenAI-style instruction/tool roles to /messages.
+        // Translate those roles rather than dropping their history or weakening validation.
+        if (Array.isArray(request.messages)) {
+            const instructions: AnthropicContentBlock[] = [];
+            const messages: AnthropicMessage[] = [];
+            const blocks = (value: unknown): AnthropicContentBlock[] => typeof value === 'string' ? [{ type: 'text', text: value }] : value as AnthropicContentBlock[];
+            for (const message of request.messages) {
+                if (message && ['system', 'developer'].includes(message.role)) {
+                    const content = blocks(message.content);
+                    if (!Array.isArray(content) || content.some(block => !block || block.type !== 'text')) return request;
+                    instructions.push(...content);
+                } else if (message?.role === 'tool' && typeof message.tool_call_id === 'string') {
+                    messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: message.tool_call_id, content: message.content ?? '' }] });
+                } else if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+                    const content = message.content == null ? [] : blocks(message.content);
+                    if (!Array.isArray(content)) return request;
+                    messages.push({ role: 'assistant', content: [...content, ...message.tool_calls.map((call: ToolCall) => ({ type: 'tool_use', id: call.id, name: call.function.name, input: JSON.parse(call.function.arguments) }))] });
+                } else messages.push(message);
+            }
+            if (instructions.length) {
+                const existing = request.system == null ? [] : blocks(request.system);
+                if (!Array.isArray(existing)) return request;
+                request.system = [...existing, ...instructions];
+            }
+            request.messages = messages;
+        }
+        return request as AnthropicRequest;
     } catch {
         return null;
     }

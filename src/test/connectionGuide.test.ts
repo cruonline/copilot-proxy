@@ -6,7 +6,7 @@ describe('Connection guide', () => {
     it('documents every exposed route, aliases, preflight, and authenticated examples while stopped', () => {
         const { api, setup } = getConnectionGuide(9123, []);
         for (const route of ['/v1/chat/completions', '/chat/completions', '/v1/messages', '/messages',
-            '/v1/models', '/models', '/v1/tools', '/tools', '/health']) expect(api).to.contain(route);
+            '/v1/models', '/models', '/v1/model-catalog', '/model-catalog', '/v1/tools', '/tools', '/health']) expect(api).to.contain(route);
         expect(api).to.contain('Alias: <code>/</code>').and.to.contain('OPTIONS');
         expect(api).to.contain('tags=search&amp;name=file').and.to.contain('Bearer $COPILOT_GATEWAY_API_KEY');
         expect(api).to.contain('x-api-key: $COPILOT_GATEWAY_API_KEY');
@@ -17,12 +17,15 @@ describe('Connection guide', () => {
         }
         expect(setup).not.to.contain('not-needed');
         expect(setup).to.contain('Codex connects directly using Responses');
+        expect(setup).to.contain('model_catalog_json').and.to.contain('ABSOLUTE_PATH_TO_CODEX_MODELS_JSON');
+        expect(setup).to.contain('Desktop model picker');
         expect(api).to.contain('/v1/responses');
         expect(setup).to.contain('setupClaudeGatewayBtn').and.to.contain('restoreClaudeGatewayBtn');
     });
 
     it('escapes model IDs and uses the configured default in dynamically generated examples', () => {
-        const guide = getConnectionGuide(4567, [], '</script>"&test');
+        const guide = getConnectionGuide(4567, [], '</script>"&test', 'C:\\Users\\Example Name\\codex-models.json');
+        expect(guide.setup).to.contain('Example Name').and.to.contain('codex-models.json');
         expect(guide.setup).not.to.contain('</script>');
         expect(guide.setup).to.contain('&lt;/script&gt;');
         expect(guide.api).not.to.contain('8080');

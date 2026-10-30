@@ -4,7 +4,7 @@ import { write } from './wire';
 import { Usage } from './types';
 import { ProxyError, checkAbort } from './errors';
 
-export interface NativeObservation {usage?:Usage;firstTokenAt?:number;failed:boolean;preview?:unknown}
+export interface NativeObservation {usage?:Usage;firstTokenAt?:number;failed:boolean;preview?:unknown;outputChars?:number;errorMessage?:string}
 function usageOf(raw:any,previous?:Usage):Usage|undefined {
     if(!raw||typeof raw!=='object')return previous;
     const input=raw.input_tokens??raw.prompt_tokens??previous?.input;
@@ -28,7 +28,10 @@ export async function forwardNative(response:Response,res:ServerResponse,signal:
             const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
             // Error payloads are allowed to preserve their wire structure, never credentials.
             const safe=response.ok?text:sanitize(text);output=Buffer.from(safe);
-            try{const data=JSON.parse(safe);observed.usage=usageOf(data.usage);if(capture)observed.preview=data;}catch{throw new ProxyError(502,'Native upstream returned invalid JSON.','upstream_error');}
+            try{const data=JSON.parse(safe);observed.usage=usageOf(data.usage);if(capture)observed.preview=data;
+                observed.outputChars=(data.output??[]).reduce((sum:number,item:any)=>sum+(item.content??[]).reduce((n:number,part:any)=>n+(typeof part.text==='string'?part.text.length:0),0),0);
+                if(data.error?.message)observed.errorMessage=sanitize(String(data.error.message));
+            }catch{throw new ProxyError(502,'Native upstream returned invalid JSON.','upstream_error');}
         }
         res.writeHead(response.status,headers);await write(res,output,signal);res.end();return observed;
     }
@@ -55,8 +58,10 @@ export async function forwardNative(response:Response,res:ServerResponse,signal:
             else truncated=true;
         }
         observed.usage=usageOf(data.usage??data.response?.usage??data.message?.usage,observed.usage);
+        if(data.type==='response.output_text.delta'&&typeof data.delta==='string')observed.outputChars=(observed.outputChars??0)+data.delta.length;
+        if(data.type==='response.completed'&&observed.outputChars===undefined)observed.outputChars=(data.response?.output??[]).reduce((sum:number,item:any)=>sum+(item.content??[]).reduce((n:number,part:any)=>n+(typeof part.text==='string'?part.text.length:0),0),0);
         if(observed.firstTokenAt===undefined&&(data.delta?.text||data.type?.endsWith('.delta')||data.choices?.some((c:any)=>c.delta?.content||c.delta?.tool_calls)))observed.firstTokenAt=performance.now();
-        if(data.type==='response.failed'||data.type==='error'||data.error)observed.failed=true;
+        if(data.type==='response.failed'||data.type==='error'||data.error){observed.failed=true;const message=data.error?.message??data.response?.error?.message;if(message)observed.errorMessage=sanitize(String(message));}
     }
     if(capture)observed.preview=captured.join('\n')+(truncated?'\n[preview truncated]':'');
     res.end();return observed;

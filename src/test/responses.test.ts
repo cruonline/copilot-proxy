@@ -4,6 +4,8 @@ import * as zlib from 'zlib';
 import { handleResponses, ResponsesInference, NativeResponses } from '../responses/handler';
 import { normalize } from '../responses/normalize';
 import { Turn } from '../responses/types';
+import { RequestLogEntry, parseAnthropicRequestBody, validateAnthropicRequest, convertAnthropicToInternal } from '../core';
+import { messagesRequest, messagesEvents } from '../responses/backends/messages-bridge';
 import { CopilotAuth, DirectBackend, approvedURL } from '../responses/backends/direct';
 import { inferResponses, responseMessages } from '../responses/vscodeAdapter';
 import type * as vscode from 'vscode';
@@ -14,11 +16,13 @@ describe('Recovered Codex Responses compatibility', () => {
     let turns: Turn[];
     let infer: ResponsesInference;
     let native: NativeResponses | undefined;
+    let logs: RequestLogEntry[];
     beforeEach(async () => {
         turns = [];
         native = undefined;
+        logs = [];
         infer = async function* (turn) { turns.push(turn); yield { kind: 'text', text: 'Hello 🌍' }; yield { kind: 'finish', reason: 'stop' }; };
-        server = http.createServer((req, res) => { void handleResponses(req, res, { 'Access-Control-Allow-Origin': 'http://localhost' }, (turn, signal) => infer(turn, signal), native); });
+        server = http.createServer((req, res) => { void handleResponses(req, res, { 'Access-Control-Allow-Origin': 'http://localhost' }, (turn, signal) => infer(turn, signal), native, text => text.replace(/synthetic-secret/g, '[redacted]'), entry => logs.push(entry)); });
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
         base = `http://127.0.0.1:${(server.address() as import('net').AddressInfo).port}`;
     });
@@ -37,6 +41,76 @@ describe('Recovered Codex Responses compatibility', () => {
                 expect(events.at(-1).response.output[0].content[0].text).to.equal('Hello 🌍');
             }
         }
+    });
+
+    it('logs public/native JSON, SSE and errors exactly once with sanitized failures', async () => {
+        for (const stream of [false, true]) {
+            await (await fetch(base + '/responses', { method: 'POST', body: JSON.stringify({ input: 'Hello', stream }) })).text();
+            expect(logs.at(-1)).to.include({ status: 'success', stream, messageCount: 1, outputChars: 'Hello 🌍'.length });
+        }
+        native = async () => Response.json({ error: { message: 'synthetic-secret' } }, { status: 400 });
+        await (await fetch(base + '/responses', { method: 'POST', body: JSON.stringify({ input: 'Hello' }) })).text();
+        expect(logs.at(-1)).to.include({ status: 'error' });
+        native = undefined;
+        infer = async function* () { yield { kind: 'text', text: 'Partial' }; throw new Error('synthetic-secret'); };
+        await (await fetch(base + '/responses', { method: 'POST', body: JSON.stringify({ input: 'Hello' }) })).text();
+        expect(logs).to.have.length(4);
+        expect(JSON.stringify(logs)).not.to.contain('synthetic-secret');
+    });
+
+    it('adapts a Responses request when native routing selects a Chat-only model', async () => {
+        native = async (_route, raw) => { (raw as { model: string }).model = 'claude-sonnet-5.5'; return undefined; };
+        const response = await fetch(base + '/responses', { method: 'POST', body: JSON.stringify({ model: 'sonnet 5.5', input: 'Hello', stream: true }) });
+        const output = await response.text();
+        expect(output).to.contain('response.completed');
+        expect(turns[0].model).to.equal('claude-sonnet-5.5');
+        expect(logs[0].model).to.equal('claude-sonnet-5.5');
+    });
+
+    it('preserves Desktop instruction and tool roles when translating to Anthropic history', () => {
+        const parsed = parseAnthropicRequestBody(JSON.stringify({ max_tokens: 1024, system: 'Existing', messages: [
+            { role: 'user', content: 'Read' }, { role: 'system', content: 'Be precise' }, { role: 'developer', content: 'Use tools' },
+            { role: 'assistant', content: null, tool_calls: [{ id: 'read-id', type: 'function', function: { name: 'read', arguments: '{"path":"x"}' } }] },
+            { role: 'tool', tool_call_id: 'read-id', content: 'File content' }
+        ] }))!;
+        expect(validateAnthropicRequest(parsed)).to.equal(null);
+        const internal = convertAnthropicToInternal(parsed);
+        expect(internal[0].content).to.equal('Existing\nBe precise\nUse tools');
+        expect(internal.at(-1)).to.include({ role: 'tool', tool_call_id: 'read-id', content: 'File content' });
+        expect(internal[2].tool_calls?.[0].function.arguments).to.equal('{"path":"x"}');
+    });
+
+    it('routes Messages-only models and converts streamed tool arguments and usage to Responses', async () => {
+        const seen: string[] = [];
+        const events = [
+            { type: 'message_start', message: { usage: { input_tokens: 11, output_tokens: 0 } } },
+            { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+            { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+            { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'call-id', name: 'read', input: {} } },
+            { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"x"}' } },
+            { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 7 } }, { type: 'message_stop' }
+        ];
+        const request: typeof fetch = async (url, init) => {
+            seen.push(String(url));
+            if (String(url).includes('copilot_internal')) return Response.json({ token: 'test', expires_at: Date.now() / 1000 + 3600 });
+            if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'claude-sonnet-5.5', supported_endpoints: ['/messages'] }] });
+            expect(JSON.parse(init!.body as string).messages[0].role).to.equal('user');
+            return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } });
+        };
+        const backend = new DirectBackend(new CopilotAuth(async () => 'github', request), request);
+        await backend.listModels(new AbortController().signal);
+        const turn = normalize({ model: 'claude-sonnet-5.5', input: 'Hello', instructions: 'Be precise', tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }] }, 'responses');
+        expect(messagesRequest(turn).system).to.deep.equal([{ type: 'text', text: 'Be precise' }]);
+        const output = [];
+        for await (const event of backend.chat(turn, new AbortController().signal)) output.push(event);
+        expect(seen.at(-1)).to.match(/\/messages$/);
+        expect(output).to.deep.include({ kind: 'finish', reason: 'tool_calls' });
+        expect(output).to.deep.include({ kind: 'tool', index: 1, arguments: '{"path":"x"}' });
+        expect(output.find(event => event.kind === 'usage')).to.have.nested.property('usage.input', 11);
+        const partial = new Response('data: {"type":"message_start"}\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
+        try { for await (const _event of messagesEvents(partial, new AbortController().signal)) { /* consume */ } throw new Error('Expected truncation error'); }
+        catch (error) { expect((error as Error).message).to.contain('without completion'); }
+        backend.dispose();
     });
 
     it('round-trips namespaced function and freeform apply_patch calls/results without changing IDs', async () => {

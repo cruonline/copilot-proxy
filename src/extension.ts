@@ -13,13 +13,50 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import { ApiKeyManager, generateApiKey, validateApiKey } from './apiKey';
 import { getConnectionGuide, connectionGuideStyles, connectionGuideScript } from './connectionGuide';
-import { getClaudeGatewayDirectories, setupClaudeGateway, restoreClaudeGateway } from './claudeGateway';
+import { getClaudeGatewayDirectories, setupClaudeGateway, restoreClaudeGateway, ClaudeGatewayModel } from './claudeGateway';
 import { handleResponses } from './responses/handler';
 import { inferResponses } from './responses/vscodeAdapter';
 import { CopilotAuth, DirectBackend } from './responses/backends/direct';
 import { object } from './responses/normalize';
 import { ProxyError } from './responses/errors';
 import { codexCatalog } from './responses/catalog';
+import { CatalogWriter } from './responses/catalogWriter';
+import * as path from 'node:path';
+import { Model } from './responses/types';
+
+const catalogWriter = new CatalogWriter();
+const CATALOG_EXPORT_PATH_KEY = 'copilotGateway.codexCatalogExportPath';
+let catalogTimer: ReturnType<typeof setInterval> | undefined;
+let syncingCatalog: Promise<void> | undefined;
+function publicCatalogModels(): Model[] {
+    return cachedModels.map(model => ({
+        id: model.id, name: model.name, contextWindow: model.maxInputTokens,
+        capabilities: { images: 'unknown', tools: 'unknown', generationControls: false, usage: 'estimated' }
+    }));
+}
+function syncCodexCatalog(): Promise<void> {
+    if (!extensionContext?.globalStorageUri || vscode.env.remoteName) return Promise.resolve();
+    if (syncingCatalog) return syncingCatalog;
+    const context = extensionContext;
+    syncingCatalog = (async () => {
+        const config = vscode.workspace.getConfiguration('copilotGateway');
+        const models = config.get<string>('responsesBackend', 'vscode') === 'direct'
+            ? await getDirectResponses().listModels(AbortSignal.timeout(30000)) : publicCatalogModels();
+        if (!models.some(model => model.kind !== 'embedding')) return;
+        const destinations = new Set([path.join(context.globalStorageUri.fsPath, 'codex-models.json')]);
+        const configured = config.get<string>('codexCatalogPath', '').trim();
+        const exported = context.globalState.get<string>(CATALOG_EXPORT_PATH_KEY);
+        if (configured) {
+            if (!path.isAbsolute(configured)) logWarn('Codex Catalog Path must be absolute. The default catalog will still be updated.');
+            else destinations.add(configured);
+        }
+        if (exported) destinations.add(exported);
+        const results = await Promise.allSettled([...destinations].map(destination => catalogWriter.update(destination, models)));
+        if (results.some(result => result.status === 'rejected')) throw new Error('Catalog destination update failed.');
+    })().catch(() => { logWarn('Automatic Codex catalog update failed. Keeping the previous catalog; check Copilot sign-in and catalog file permissions.'); })
+        .finally(() => { syncingCatalog = undefined; });
+    return syncingCatalog;
+}
 
 let directResponses: DirectBackend | undefined;
 let directSecrets: string[] = [];
@@ -35,16 +72,19 @@ function getDirectResponses(): DirectBackend {
     return directResponses;
 }
 
-async function nativeResponses(path: string, raw: unknown, signal: AbortSignal, method: string): Promise<Response> {
+async function nativeResponses(path: string, raw: unknown, signal: AbortSignal, method: string): Promise<Response | undefined> {
     if (raw !== undefined) {
         const request = object(raw, 'request');
         if (request.model !== undefined && typeof request.model !== 'string') throw new ProxyError(400, 'model must be a string.');
-        if (!request.model) {
-            const configured = vscode.workspace.getConfiguration('copilotGateway').get<string>('defaultModel', '');
-            const models = await getDirectResponses().listModels(signal);
-            request.model = configured || models.find(model => model.kind !== 'embedding')?.id;
-            if (!request.model) throw new ProxyError(503, 'No native Copilot models available.', 'service_unavailable');
-        }
+        const configured = vscode.workspace.getConfiguration('copilotGateway').get<string>('defaultModel', '');
+        const models = (await getDirectResponses().listModels(signal)).filter(model => model.kind !== 'embedding').map(model => ({ ...model, family: model.family ?? model.id }));
+        const model = findBestModel(request.model as string | undefined, models, configured);
+        if (!model) throw new ProxyError(503, 'No native Copilot models available.', 'service_unavailable');
+        request.model = model.id;
+        // Claude models can expose Chat/Messages without a native Responses endpoint.
+        if (path === '/responses' && model.endpoints && !model.endpoints.includes('/responses')) return undefined;
+        if (path.startsWith('/responses/') && model.endpoints && !model.endpoints.includes('/responses'))
+            throw new ProxyError(400, 'This model does not support native Responses storage or remote compaction. Send complete history and use local compaction.', 'unsupported_feature');
     }
     return getDirectResponses().nativeRequest(path, raw, signal, {}, method);
 }
@@ -137,7 +177,9 @@ function persistLifetimeStats(): void {
     extensionContext?.globalState.update(LIFETIME_STATS_KEY, lifetimeStats);
 }
 
-function addRequestLog(entry: RequestLogEntry): void {
+const loggedResponses = new WeakSet<http.ServerResponse>();
+function addRequestLog(entry: RequestLogEntry, response?: http.ServerResponse): void {
+    if (response) loggedResponses.add(response);
     // Always collect logs
     requestLogs.unshift(entry);
     if (requestLogs.length > MAX_REQUEST_LOGS) {
@@ -225,9 +267,11 @@ async function refreshModels(): Promise<vscode.LanguageModelChat[]> {
         cachedModels = await Promise.race([modelsPromise, timeoutPromise]);
         modelsLastRefreshed = Date.now();
         log(`Found ${cachedModels.length} models`);
+        await syncCodexCatalog();
         return cachedModels;
     } catch (error) {
         logError('Failed to refresh models', error);
+        if (vscode.workspace.getConfiguration('copilotGateway').get<string>('responsesBackend', 'vscode') === 'direct') await syncCodexCatalog();
         return cachedModels; // Return existing cache on error
     } finally {
         isRefreshing = false;
@@ -862,7 +906,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'success'
-                    });
+                    }, res);
                 } catch (error) {
                     const durationMs = Date.now() - startTime;
                     logError(`Auto-execute failed after ${durationMs}ms`, error);
@@ -882,7 +926,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         durationMs: Date.now() - startTime,
                         status: 'error',
                         errorMessage
-                    });
+                    }, res);
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -1058,7 +1102,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         stream: true,
                         durationMs: Date.now() - startTime,
                         status: 'success'
-                    });
+                    }, res);
                 } catch (error) {
                     const durationMs = Date.now() - startTime;
                     logError(`Streaming request failed after ${durationMs}ms`, error);
@@ -1083,7 +1127,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         durationMs: Date.now() - startTime,
                         status: 'error',
                         errorMessage
-                    });
+                    }, res);
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -1162,7 +1206,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'success'
-                    });
+                    }, res);
                 } catch (error) {
                     const durationMs = Date.now() - startTime;
                     logError(`Non-streaming request failed after ${durationMs}ms`, error);
@@ -1189,7 +1233,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         durationMs: Date.now() - startTime,
                         status: 'error',
                         errorMessage
-                    });
+                    }, res);
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -1384,7 +1428,7 @@ async function handleAnthropicMessages(req: http.IncomingMessage, res: http.Serv
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'success'
-                    });
+                    }, res);
                 } catch (error) {
                     const durationMs = Date.now() - startTime;
                     logError(`Anthropic auto-execute failed after ${durationMs}ms`, error);
@@ -1408,7 +1452,7 @@ async function handleAnthropicMessages(req: http.IncomingMessage, res: http.Serv
                         durationMs: Date.now() - startTime,
                         status: 'error',
                         errorMessage
-                    });
+                    }, res);
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -1572,7 +1616,7 @@ async function handleAnthropicMessages(req: http.IncomingMessage, res: http.Serv
                         stream: true,
                         durationMs: Date.now() - startTime,
                         status: 'success'
-                    });
+                    }, res);
                 } catch (error) {
                     const durationMs = Date.now() - startTime;
                     logError(`Anthropic streaming failed after ${durationMs}ms`, error);
@@ -1593,7 +1637,7 @@ async function handleAnthropicMessages(req: http.IncomingMessage, res: http.Serv
                         durationMs: Date.now() - startTime,
                         status: 'error',
                         errorMessage
-                    });
+                    }, res);
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -1653,7 +1697,7 @@ async function handleAnthropicMessages(req: http.IncomingMessage, res: http.Serv
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'success'
-                    });
+                    }, res);
                 } catch (error) {
                     const durationMs = Date.now() - startTime;
                     logError(`Anthropic non-streaming failed after ${durationMs}ms`, error);
@@ -1677,7 +1721,7 @@ async function handleAnthropicMessages(req: http.IncomingMessage, res: http.Serv
                         durationMs: Date.now() - startTime,
                         status: 'error',
                         errorMessage
-                    });
+                    }, res);
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -1772,13 +1816,31 @@ function createServer(_port: number): http.Server {
 
         // Parse URL to extract path without query params for routing
         const urlPath = url.split('?')[0];
+        const requestStarted = Date.now();
+        res.once('finish', () => {
+            if (req.method !== 'POST' || res.statusCode < 400 || loggedResponses.has(res)) return;
+            addRequestLog({ id: generateId(), timestamp: new Date(requestStarted).toISOString(), method: 'POST', endpoint: urlPath,
+                model: '(request rejected)', messageCount: 0, inputChars: 0, outputChars: 0, stream: false,
+                durationMs: Date.now() - requestStarted, status: 'error', errorMessage: `Request rejected (HTTP ${res.statusCode}). See Output logs for details.` }, res);
+        });
 
         const direct = vscode.workspace.getConfiguration('copilotGateway').get<string>('responsesBackend', 'vscode') === 'direct';
         const responsePath = urlPath.replace(/^\/v1/, '');
-        if ((req.method === 'POST' && ['/responses', '/responses/compact'].includes(responsePath)) ||
+        if (req.method === 'GET' && responsePath === '/model-catalog') {
+            try {
+                if (!direct) await refreshModels();
+                const models = direct ? await getDirectResponses().listModels(AbortSignal.timeout(30000)) : publicCatalogModels();
+                if (!models.some(model => model.kind !== 'embedding')) throw new Error('No models');
+                res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+                res.end(JSON.stringify(codexCatalog(models)));
+            } catch {
+                res.writeHead(503, { ...corsHeaders, 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: { type: 'service_unavailable', message: 'Model catalog unavailable. Sign into Copilot and refresh models.' } }));
+            }
+        } else if ((req.method === 'POST' && ['/responses', '/responses/compact'].includes(responsePath)) ||
             (['GET', 'DELETE'].includes(req.method || '') && /^\/responses\/[A-Za-z0-9_-]{1,256}$/.test(responsePath))) {
-            await handleResponses(req, res, corsHeaders, (turn, signal) => inferResponses(turn, signal, getModel, sendRequestWithRetry, vscode), direct ? nativeResponses : undefined,
-                text => directSecrets.reduce((result, secret) => secret ? result.split(secret).join('[redacted]') : result, text));
+            await handleResponses(req, res, corsHeaders, (turn, signal) => direct ? getDirectResponses().chat(turn, signal) : inferResponses(turn, signal, getModel, sendRequestWithRetry, vscode), direct ? nativeResponses : undefined,
+                text => directSecrets.reduce((result, secret) => secret ? result.split(secret).join('[redacted]') : result, text), entry => addRequestLog(entry, res));
         } else if (direct && req.method === 'GET' && (responsePath === '/models' || /^\/models\/[A-Za-z0-9_.-]{1,256}$/.test(responsePath))) {
             await handleResponses(req, res, corsHeaders, (turn, signal) => inferResponses(turn, signal, getModel, sendRequestWithRetry, vscode), nativeResponses,
                 text => directSecrets.reduce((result, secret) => secret ? result.split(secret).join('[redacted]') : result, text));
@@ -1899,7 +1961,9 @@ function updateStatusBar(port?: number): void {
 }
 
 function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[], settings?: SettingsInfo, logs: RequestLogEntry[] = [], session: StatsCounters = emptyStats(), lifetime: StatsCounters = emptyStats()): string {
-    const guide = getConnectionGuide(port, models, settings?.defaultModel);
+    const catalogPath = extensionContext?.globalStorageUri && !vscode.env.remoteName
+        ? path.join(extensionContext.globalStorageUri.fsPath, 'codex-models.json') : undefined;
+    const guide = getConnectionGuide(port, models, settings?.defaultModel, catalogPath);
     const statusColor = isRunning ? '#4caf50' : '#9e9e9e';
     const statusText = isRunning ? `Running on 127.0.0.1:${port}` : 'Stopped';
     const buttonText = isRunning ? 'Stop Server' : 'Start Server';
@@ -2116,7 +2180,7 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                         ${logs.map(entry => {
                             const time = new Date(entry.timestamp).toLocaleTimeString();
                             const statusClass = entry.status === 'success' ? 'status-success' : 'status-error';
-                            const statusIcon = entry.status === 'success' ? '✓' : '✗';
+                            const statusLabel = entry.status === 'success' ? 'Success' : 'Error';
                             const apiType = entry.endpoint.includes('messages') ? 'Anthropic' : 'OpenAI';
                             const apiClass = apiType === 'Anthropic' ? 'api-anthropic' : 'api-openai';
                             return `
@@ -2129,20 +2193,21 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                                     <td class="log-num">${entry.outputChars.toLocaleString()}</td>
                                     <td class="log-stream">${entry.stream ? 'Yes' : 'No'}</td>
                                     <td class="log-duration">${entry.durationMs}ms</td>
-                                    <td class="log-status">${statusIcon}${entry.errorMessage ? ` <span title="${escapeHtml(entry.errorMessage)}">!</span>` : ''}</td>
+                                    <td class="log-status">${statusLabel}</td>
                                 </tr>
+                                ${entry.errorMessage ? `<tr class="status-error"><td colspan="9" class="log-error-detail">${escapeHtml(entry.errorMessage)}</td></tr>` : ''}
                             `;
                         }).join('')}
                     </tbody>
                 </table>
             </div>
         </div>
-    ` : (settings?.logRequestsToUI ? `
+    ` : `
         <div class="section logs-section">
             <div class="section-header">Request Logs (0)</div>
-            <div class="empty-state">No requests logged yet</div>
+            <div class="empty-state">${settings?.logRequestsToUI ? 'No requests logged yet. Send a request to see its result here.' : 'Enable Log Requests to UI in Overview to display request history.'}</div>
         </div>
-    ` : '');
+    `;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -2302,7 +2367,7 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             border-radius: 6px;
         }
         .method {
-            font-size: 0.75em;
+            font-size: 12px;
             font-weight: 600;
             padding: 3px 6px;
             border-radius: 3px;
@@ -2468,15 +2533,15 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             margin-top: 24px;
         }
         .logs-table-container {
-            max-height: 300px;
-            overflow-y: auto;
+            max-height: max(240px, calc(100vh - 220px));
+            overflow: auto;
             border-radius: 6px;
             background: var(--vscode-editor-inactiveSelectionBackground);
         }
         .logs-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.85em;
+            font-size: 13px;
         }
         .logs-table th,
         .logs-table td {
@@ -2515,7 +2580,7 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             display: inline-block;
             padding: 1px 6px;
             border-radius: 3px;
-            font-size: 0.8em;
+            font-size: 12px;
             font-weight: 600;
         }
         .api-badge.api-openai {
@@ -2536,6 +2601,7 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
         .logs-table .log-status {
             text-align: center;
         }
+        .logs-table .log-error-detail { white-space: normal; overflow-wrap: anywhere; }
         .logs-table tr.status-success .log-status {
             color: #4caf50;
         }
@@ -2552,11 +2618,12 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
     <div class="container">
         <div class="header">
             <h1 class="title">Copilot Gateway</h1>
-            <button class="secondary-btn" id="logsBtn">View Logs</button>
+            <button class="secondary-btn" id="logsBtn">Output logs</button>
         </div>
 
         <nav class="guide-tabs" role="tablist" aria-label="Proxy workspace">
             <button id="tab-overview" class="guide-tab" role="tab" data-guide-tab="overview" aria-selected="true" aria-controls="panel-overview">Overview</button>
+            <button id="tab-logs" class="guide-tab" role="tab" data-guide-tab="logs" aria-selected="false" aria-controls="panel-logs" tabindex="-1">Request logs</button>
             <button id="tab-api" class="guide-tab" role="tab" data-guide-tab="api" aria-selected="false" aria-controls="panel-api" tabindex="-1">API guide</button>
             <button id="tab-clients" class="guide-tab" role="tab" data-guide-tab="clients" aria-selected="false" aria-controls="panel-clients" tabindex="-1">Client setup</button>
         </nav>
@@ -2613,8 +2680,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             </div>
         </div>
 
-        ${logsSection}
         </section>
+        <section id="panel-logs" role="tabpanel" aria-labelledby="tab-logs" tabindex="0" hidden>${logsSection}</section>
         <section id="panel-api" role="tabpanel" aria-labelledby="tab-api" tabindex="0" hidden>${guide.api}</section>
         <section id="panel-clients" role="tabpanel" aria-labelledby="tab-clients" tabindex="0" hidden>${guide.setup}</section>
     </div>
@@ -2776,28 +2843,38 @@ async function configureClaudeDesktop(restore = false): Promise<void> {
         const directories = await getClaudeGatewayDirectories();
         const config = vscode.workspace.getConfiguration('copilotGateway');
         const root = `http://127.0.0.1:${config.get<number>('port', 8090)}`;
-        let model = '';
+        const models: ClaudeGatewayModel[] = [];
         if (!restore) {
             await refreshModels();
-            const choices = cachedModels.map(model => ({ label: model.id, description: model.name }));
-            if (!choices.length) throw new Error('No models available. Sign into Copilot and refresh models before setup.');
+            const choices = cachedModels.map(model => ({ label: model.name, description: model.id, modelId: model.id }));
+            if (choices.length < 3) throw new Error('No models available for a three-model setup. Sign into Copilot and refresh models; at least three models are required.');
             const defaultModel = config.get<string>('defaultModel', '');
-            choices.sort((a, b) => Number(b.label === defaultModel) - Number(a.label === defaultModel));
-            const selected = await vscode.window.showQuickPick(choices, { title: 'Claude Desktop gateway model' });
-            if (!selected) return;
-            model = selected.label;
+            const saved = extensionContext?.globalState.get<ClaudeGatewayModel[]>('copilotGateway.claudeDesktopModels', []) ?? [];
+            for (let index = 0; index < 3; index++) {
+                const preferred = saved[index]?.name ?? (index === 0 ? defaultModel : '');
+                const available = choices.filter(choice => !models.some(model => model.name === choice.modelId))
+                    .sort((a, b) => Number(b.modelId === preferred) - Number(a.modelId === preferred));
+                const selected = await vscode.window.showQuickPick(available, { title: `Claude Desktop: model ${index + 1} of 3`, placeHolder: 'Choose a model for the Desktop dropdown (Claude, GPT, Gemini, or another available model)' });
+                if (!selected) return;
+                const label = await vscode.window.showInputBox({ title: `Claude Desktop: label ${index + 1} of 3`,
+                    prompt: `Dropdown label for ${selected.modelId}`, value: saved.find(model => model.name === selected.modelId)?.labelOverride ?? selected.label,
+                    validateInput: value => value.trim() ? undefined : 'Enter a model label.' });
+                if (label === undefined) return;
+                models.push({ name: selected.modelId, labelOverride: label.trim() });
+            }
             await apiKeys.initialize();
         }
         const action = restore ? 'Restore configuration' : 'Configure gateway';
         const confirmed = await vscode.window.showWarningMessage(
-            `${action}? Fully quit Claude Desktop first. ${restore ? 'Restore the original three configuration files from the first setup backup; later edits to those files will be replaced.' : `Gateway: ${root}/. Model: ${model}. The saved proxy key will be written to local JSON.`}\n\n${directories.join('\n')}`,
+            `${action}? Fully quit Claude Desktop first. ${restore ? 'Restore the original three configuration files from the first setup backup; later edits to those files will be replaced.' : `Gateway: ${root}/. Models:\n${models.map(model => `${model.labelOverride} (${model.name})`).join('\n')}\nThe saved proxy key will be written to local JSON.`}\n\n${directories.join('\n')}`,
             { modal: true }, action);
         if (confirmed !== action) return;
         let changed = false;
         for (const directory of directories) {
             if (restore) changed = await restoreClaudeGateway(directory) || changed;
-            else { await setupClaudeGateway(directory, root, apiKeys.savedKey!, model); changed = true; }
+            else { await setupClaudeGateway(directory, root, apiKeys.savedKey!, models); changed = true; }
         }
+        if (!restore && changed) await extensionContext?.globalState.update('copilotGateway.claudeDesktopModels', models);
         vscode.window.showInformationMessage(changed ? 'Claude Desktop configuration updated. Relaunch Claude Desktop.' : 'No Copilot Gateway gateway backup found. Nothing restored.');
     } catch (error) {
         // Never expose raw filesystem/JSON errors, which may contain credentials.
@@ -2980,6 +3057,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 directResponses?.dispose();
                 directResponses = undefined;
                 directSecrets = [];
+                void refreshModels();
             }
         }));
     }
@@ -3043,10 +3121,22 @@ export function activate(context: vscode.ExtensionContext): void {
                 const destination = await vscode.window.showSaveDialog({ saveLabel: 'Export Codex model catalog', filters: { JSON: ['json'] } });
                 if (!destination) return;
                 await vscode.workspace.fs.writeFile(destination, Buffer.from(JSON.stringify(codexCatalog(models), null, 2)));
-                vscode.window.showInformationMessage(`Catalog exported. Set model_catalog_json to ${JSON.stringify(destination.fsPath)} in Codex config.toml.`);
+                if (destination.scheme === 'file') await context.globalState.update(CATALOG_EXPORT_PATH_KEY, destination.fsPath);
+                vscode.window.showInformationMessage(`Catalog exported and will update automatically. Set model_catalog_json to ${JSON.stringify(destination.fsPath)} in Codex config.toml.`);
             } catch { vscode.window.showErrorMessage('Could not export model catalog. Check Copilot sign-in and file permissions.'); }
         })
     );
+
+    if (context.globalStorageUri && !vscode.env.remoteName) {
+        log(`Automatic Codex catalog: ${path.join(context.globalStorageUri.fsPath, 'codex-models.json')}`);
+        catalogTimer = setInterval(() => { void refreshModels(); }, 5 * 60 * 1000);
+        context.subscriptions.push({ dispose: () => { if (catalogTimer) clearInterval(catalogTimer); catalogTimer = undefined; } });
+        void refreshModels();
+        if (vscode.workspace.onDidChangeConfiguration) context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+            if (event.affectsConfiguration('copilotGateway.responsesBackend') || event.affectsConfiguration('copilotGateway.codexCatalogPath'))
+                void refreshModels();
+        }));
+    }
 
     // Listen for model changes
     context.subscriptions.push(
@@ -3068,6 +3158,8 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+    if (catalogTimer) clearInterval(catalogTimer);
+    catalogTimer = undefined;
     directResponses?.dispose();
     directResponses = undefined;
     directSecrets = [];

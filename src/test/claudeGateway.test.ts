@@ -5,6 +5,32 @@ import * as os from 'os';
 import { GATEWAY_ID, getClaudeGatewayDirectories, setupClaudeGateway, restoreClaudeGateway } from '../claudeGateway';
 
 describe('Claude Desktop gateway configuration', () => {
+    it('writes three ordered models with custom labels, replaces the list and restores originals', async () => {
+        const models = [
+            { name: 'claude-sonnet-5.5', labelOverride: 'Sonnet' },
+            { name: 'gpt-6.1-sol', labelOverride: 'GPT coding' },
+            { name: 'gemini-4-argon', labelOverride: 'Gemini' }
+        ];
+        await setupClaudeGateway(dir, 'http://localhost:8090', 'secret', models);
+        const gatewayPath = path.join(dir, 'configLibrary', `${GATEWAY_ID}.json`);
+        const gateway = JSON.parse(await fs.readFile(gatewayPath, 'utf8'));
+        expect(gateway.inferenceModels).to.deep.equal(models);
+        expect(gateway.inferenceGatewayAuthScheme).to.equal('bearer');
+        await setupClaudeGateway(dir, 'http://localhost:8090', 'new-key', [...models].reverse());
+        expect(JSON.parse(await fs.readFile(gatewayPath, 'utf8')).inferenceModels).to.deep.equal([...models].reverse());
+        await restoreClaudeGateway(dir);
+        expect(await fs.stat(gatewayPath).then(() => true, () => false)).to.equal(false);
+    });
+
+    it('rejects empty, duplicate, oversized and unlabeled model lists before changing files', async () => {
+        const one = { name: 'model', labelOverride: 'Model' };
+        for (const models of [[], [one, one], [one, { ...one, name: 'b' }, { ...one, name: 'c' }, { ...one, name: 'd' }], [{ name: 'model', labelOverride: '' }]]) {
+            let failed = false;
+            try { await setupClaudeGateway(dir, 'http://localhost:8090', 'secret', models); } catch { failed = true; }
+            expect(failed).to.equal(true);
+            expect(await fs.readdir(dir)).to.deep.equal([]);
+        }
+    });
     let dir: string;
     beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-gateway-test-')); });
     afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });

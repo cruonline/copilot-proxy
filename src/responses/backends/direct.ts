@@ -1,9 +1,11 @@
 import { Backend, InferenceEvent, Model, Turn, ValuePart } from '../types';
-import { ProxyError, checkAbort } from '../errors';
+import { ProxyError, checkAbort, errorInfo } from '../errors';
 import { parseSSE } from '../sse';
 import { estimatedInput, object } from '../normalize';
 import {prepareChatBody} from './chat-options';
 import {responseRequest,responseEvents} from './responses-bridge';
+import { messagesRequest, messagesEvents } from './messages-bridge';
+import { claudeTools, unwrapClaudeEvents } from '../claudeTools';
 export type Fetch = typeof fetch;
 const allowedCopilot = new Set(['api.githubcopilot.com', 'api.individual.githubcopilot.com', 'api.business.githubcopilot.com', 'api.enterprise.githubcopilot.com']);
 export function approvedURL(value: string, github = false): URL {
@@ -117,6 +119,25 @@ export class DirectBackend implements Backend {
                 continue;
             }
             if (!response.ok && !allowErrors) {
+                if (response.status === 400 && response.body) {
+                    // Read only a bounded diagnostic; errorInfo exposes recognized
+                    // validation errors and keeps arbitrary provider content private.
+                    const reader = response.body.getReader();
+                    const chunks: Uint8Array[] = [];
+                    let size = 0;
+                    try {
+                        while (size < 65536) {
+                            const chunk = await reader.read();
+                            if (chunk.done) break;
+                            size += chunk.value.byteLength;
+                            if (size < 65536) chunks.push(chunk.value);
+                        }
+                    } finally { await reader.cancel(); reader.releaseLock(); }
+                    if (size < 65536) {
+                        const rejection = errorInfo(new Error(Buffer.concat(chunks).toString('utf8')));
+                        if (rejection.status === 400) throw rejection;
+                    }
+                }
                 await response.body?.cancel();
                 const status = [401, 403, 404, 429].includes(response.status) ? response.status : 502;
                 throw new ProxyError(status, `Copilot returned HTTP ${response.status}. Check model availability, permissions and quota.`, status === 429 ? 'rate_limit_error' : 'upstream_error');
@@ -145,7 +166,15 @@ export class DirectBackend implements Backend {
     tokenDebug():unknown{return this.auth.debugToken();}
     refreshToken():void{this.auth.clear();}
     async *chat(turn: Turn, signal: AbortSignal): AsyncGenerator<InferenceEvent> {
+        const adapted = claudeTools(turn);
+        yield* unwrapClaudeEvents(this.chatRaw(adapted.turn, signal), adapted.wrapped);
+    }
+    private async *chatRaw(turn: Turn, signal: AbortSignal): AsyncGenerator<InferenceEvent> {
         const model=this.catalog?.find(m=>m.id===turn.model);
+        if (model?.endpoints?.includes('/messages') && !model.endpoints.includes('/chat/completions') && !model.endpoints.includes('/responses')) {
+            const response = await this.fetch('/messages', signal, { method: 'POST', body: JSON.stringify(messagesRequest(turn)) });
+            yield* messagesEvents(response, signal); return;
+        }
         if(model?.endpoints?.includes('/responses')&&!model.endpoints.includes('/chat/completions')){
             const response=await this.fetch('/responses',signal,{method:'POST',body:JSON.stringify(responseRequest(turn))});yield* responseEvents(response,signal);return;
         }

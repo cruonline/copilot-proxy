@@ -4,7 +4,7 @@
   "publisher": "local-copilot",
   "description": "Independent local Copilot gateway for Codex Responses, OpenAI clients, and Claude Desktop.",
   "icon": "images/icon.png",
-  "version": "0.1.1",
+  "version": "0.1.6",
   "repository": {
     "type": "git",
     "url": "https://github.com/cruonline/copilot-proxy"
@@ -76,6 +76,11 @@
           "type": "string",
           "default": "",
           "description": "Default model to use when not specified in request (leave empty to use first available)"
+        },
+        "copilotGateway.codexCatalogPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute JSON path to update automatically for Codex model_catalog_json. A catalog is always maintained in this extension's global storage; exported catalogs are also kept updated."
         },
         "copilotGateway.logRequestsToUI": {
           "type": "boolean",
