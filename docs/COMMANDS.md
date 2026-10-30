@@ -6,11 +6,11 @@ Documents all extension commands and activation events.
 
 ## Commands
 
-The extension contributes three commands accessible via the Command Palette.
+The extension contributes seven commands accessible via the Command Palette, under the independent `copilot-gateway.*` namespace.
 
-### copilot-proxy.start
+### copilot-gateway.start
 
-**Title:** Copilot Proxy: Start Server
+**Title:** Copilot Gateway: Start Server
 
 **Description:** Starts the HTTP proxy server.
 
@@ -29,9 +29,9 @@ The extension contributes three commands accessible via the Command Palette.
 
 ---
 
-### copilot-proxy.stop
+### copilot-gateway.stop
 
-**Title:** Copilot Proxy: Stop Server
+**Title:** Copilot Gateway: Stop Server
 
 **Description:** Stops the HTTP proxy server.
 
@@ -47,9 +47,9 @@ The extension contributes three commands accessible via the Command Palette.
 
 ---
 
-### copilot-proxy.status
+### copilot-gateway.status
 
-**Title:** Copilot Proxy: Show Status
+**Title:** Copilot Gateway: Show Status
 
 **Description:** Opens the status webview panel.
 
@@ -68,13 +68,39 @@ The extension contributes three commands accessible via the Command Palette.
 
 ## Command Registration
 
+### copilot-gateway.authorizeDirectResponses
+
+**Title:** Copilot Gateway: Authorize Native Codex Responses
+
+Explicitly obtains GitHub `read:user` session consent for the optional native Responses backend. Set `copilotGateway.responsesBackend` to `direct` afterwards. HTTP requests use silent session lookup and cannot open consent.
+
+### copilot-gateway.exportCodexCatalog
+
+**Title:** Copilot Gateway: Export Codex Model Catalog
+
+Exports discovered model metadata to a chosen JSON file. Set its absolute path as `model_catalog_json` in Codex config.toml to enable Copilot model context limits and freeform patch-tool metadata.
+
+### copilot-gateway.setupClaudeGateway
+
+**Title:** Copilot Gateway: Configure Claude Desktop Gateway
+
+Choose an available model and confirm the gateway URL, target directories, and local credential storage. Backs up and writes Claude Desktop third-party gateway configuration using the saved proxy key. Requires a local VS Code window; fully quit Claude Desktop first and relaunch afterwards.
+
+### copilot-gateway.restoreClaudeGateway
+
+**Title:** Copilot Gateway: Restore Claude Desktop Configuration
+
+After confirmation, restores the three original files from the first setup backup in each detected directory. Later edits to those files are replaced; unrelated library files are preserved. Does nothing when no backup exists. Fully quit and relaunch Claude Desktop around restoration.
+
 Commands are registered in `activate()`:
 
 ```typescript
 context.subscriptions.push(
-    vscode.commands.registerCommand('copilot-proxy.start', startServer),
-    vscode.commands.registerCommand('copilot-proxy.stop', stopServer),
-    vscode.commands.registerCommand('copilot-proxy.status', showStatus)
+    vscode.commands.registerCommand('copilot-gateway.start', startServer),
+    vscode.commands.registerCommand('copilot-gateway.stop', stopServer),
+    vscode.commands.registerCommand('copilot-gateway.status', showStatus),
+    vscode.commands.registerCommand('copilot-gateway.setupClaudeGateway', () => configureClaudeDesktop()),
+    vscode.commands.registerCommand('copilot-gateway.restoreClaudeGateway', () => configureClaudeDesktop(true))
 );
 ```
 
@@ -125,22 +151,22 @@ context.subscriptions.push(
 
 ```typescript
 export function activate(context: vscode.ExtensionContext): void {
-    outputChannel = vscode.window.createOutputChannel('Copilot Proxy');
+    outputChannel = vscode.window.createOutputChannel('Copilot Gateway');
     context.subscriptions.push(outputChannel);
     outputChannel.show(true);
 
     statusBarItem = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Right, 100
     );
-    statusBarItem.command = 'copilot-proxy.status';
+    statusBarItem.command = 'copilot-gateway.status';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
     // Register commands
     context.subscriptions.push(
-        vscode.commands.registerCommand('copilot-proxy.start', startServer),
-        vscode.commands.registerCommand('copilot-proxy.stop', stopServer),
-        vscode.commands.registerCommand('copilot-proxy.status', showStatus)
+        vscode.commands.registerCommand('copilot-gateway.start', startServer),
+        vscode.commands.registerCommand('copilot-gateway.stop', stopServer),
+        vscode.commands.registerCommand('copilot-gateway.status', showStatus)
     );
 
     // Listen for model changes
@@ -152,7 +178,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // Auto-start
-    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const config = vscode.workspace.getConfiguration('copilotGateway');
     if (config.get<boolean>('autoStart', true)) {
         startServer();
     }
@@ -191,14 +217,14 @@ export function deactivate(): void {
 
 ## Status Bar Interaction
 
-The status bar item triggers `copilot-proxy.status` when clicked.
+The status bar item triggers `copilot-gateway.status` when clicked.
 
 **States:**
 
 | State | Text | Icon |
 |-------|------|------|
-| Running | `Copilot Proxy: 8080` | `$(radio-tower)` |
-| Stopped | `Copilot Proxy: Off` | `$(circle-slash)` |
+| Running | `Copilot Gateway: 8080` | `$(radio-tower)` |
+| Stopped | `Copilot Gateway: Off` | `$(circle-slash)` |
 
 **Tooltip:**
 
@@ -229,9 +255,9 @@ The status panel webview sends these commands:
 
 Commands appear in Command Palette with these titles:
 
-- `Copilot Proxy: Start Server`
-- `Copilot Proxy: Stop Server`
-- `Copilot Proxy: Show Status`
+- `Copilot Gateway: Start Server`
+- `Copilot Gateway: Stop Server`
+- `Copilot Gateway: Show Status`
 
 To invoke: `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
 

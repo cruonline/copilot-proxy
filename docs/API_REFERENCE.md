@@ -118,7 +118,7 @@ const statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100 // priority
 );
-statusBarItem.text = '$(radio-tower) Copilot Proxy: 8080';
+statusBarItem.text = '$(radio-tower) Copilot Proxy: 8090';
 statusBarItem.command = 'copilot-proxy.status';
 statusBarItem.show();
 ```
@@ -169,7 +169,7 @@ panel.webview.onDidReceiveMessage(async (message) => {
 **Usage:**
 
 ```typescript
-vscode.window.showInformationMessage('Server started on port 8080');
+vscode.window.showInformationMessage('Server started on port 8090');
 ```
 
 ---
@@ -181,7 +181,7 @@ vscode.window.showInformationMessage('Server started on port 8080');
 **Usage:**
 
 ```typescript
-vscode.window.showErrorMessage('Port 8080 is already in use');
+vscode.window.showErrorMessage('Port 8090 is already in use');
 ```
 
 ---
@@ -196,7 +196,7 @@ vscode.window.showErrorMessage('Port 8080 is already in use');
 
 ```typescript
 const config = vscode.workspace.getConfiguration('copilotProxy');
-const port = config.get<number>('port', 8080);
+const port = config.get<number>('port', 8090);
 const autoStart = config.get<boolean>('autoStart', true);
 ```
 
@@ -245,7 +245,7 @@ vscode.commands.executeCommand('workbench.action.openSettings', 'copilotProxy');
 **Usage:**
 
 ```typescript
-await vscode.env.clipboard.writeText('http://127.0.0.1:8080/v1/chat/completions');
+await vscode.env.clipboard.writeText('http://127.0.0.1:8090/v1/chat/completions');
 ```
 
 ---

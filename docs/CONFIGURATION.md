@@ -1,29 +1,32 @@
 # Configuration Reference
 
-Complete reference for all VS Code Copilot Proxy settings.
+Complete reference for all VS Code Copilot Gateway settings.
 
 ---
 
 ## Settings Overview
 
-All settings are prefixed with `copilotProxy.` in VS Code settings.
+All settings are prefixed with `copilotGateway.` in VS Code settings.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `port` | number | 8080 | Server port |
+| `port` | number | 8090 | Server port |
 | `autoStart` | boolean | true | Start on activation |
 | `defaultModel` | string | "" | Default model ID |
 | `logRequestsToUI` | boolean | false | Show requests in UI |
 | `rawLogging` | boolean | false | Verbose output logging |
+| `responsesBackend` | string | "vscode" | Public VS Code adapter or opt-in native Copilot Responses (`"direct"`) |
+
+The `copilotGateway.*` namespace is independent of the original fork's `copilotProxy.*`. Native Responses requires explicit GitHub authorization and upstream endpoint support; see [Codex setup](CODEX_SETUP.md). If multiple proxy extensions run together, give them different ports.
 
 ---
 
 ## Detailed Settings
 
-### copilotProxy.port
+### copilotGateway.port
 
 **Type:** `number`
-**Default:** `8080`
+**Default:** `8090`
 **Range:** 1-65535
 
 The port number the HTTP proxy server listens on.
@@ -32,7 +35,7 @@ The port number the HTTP proxy server listens on.
 
 ```json
 {
-    "copilotProxy.port": 9090
+    "copilotGateway.port": 9090
 }
 ```
 
@@ -44,7 +47,7 @@ The port number the HTTP proxy server listens on.
 
 ---
 
-### copilotProxy.autoStart
+### copilotGateway.autoStart
 
 **Type:** `boolean`
 **Default:** `true`
@@ -55,7 +58,7 @@ Automatically start the proxy server when VS Code launches.
 
 ```json
 {
-    "copilotProxy.autoStart": false
+    "copilotGateway.autoStart": false
 }
 ```
 
@@ -66,7 +69,7 @@ Automatically start the proxy server when VS Code launches.
 
 ---
 
-### copilotProxy.defaultModel
+### copilotGateway.defaultModel
 
 **Type:** `string`
 **Default:** `""` (empty - use first available)
@@ -77,7 +80,7 @@ Default model to use when not specified in API request.
 
 ```json
 {
-    "copilotProxy.defaultModel": "copilot-gpt-4"
+    "copilotGateway.defaultModel": "copilot-gpt-4"
 }
 ```
 
@@ -89,7 +92,7 @@ Default model to use when not specified in API request.
 
 ---
 
-### copilotProxy.logRequestsToUI
+### copilotGateway.logRequestsToUI
 
 **Type:** `boolean`
 **Default:** `false`
@@ -100,7 +103,7 @@ Log all API requests and responses to the status panel UI.
 
 ```json
 {
-    "copilotProxy.logRequestsToUI": true
+    "copilotGateway.logRequestsToUI": true
 }
 ```
 
@@ -113,7 +116,7 @@ Log all API requests and responses to the status panel UI.
 
 ---
 
-### copilotProxy.rawLogging
+### copilotGateway.rawLogging
 
 **Type:** `boolean`
 **Default:** `false`
@@ -124,7 +127,7 @@ Log raw request/response content to the output channel.
 
 ```json
 {
-    "copilotProxy.rawLogging": true
+    "copilotGateway.rawLogging": true
 }
 ```
 
@@ -160,11 +163,11 @@ Settings are defined in `package.json` under `contributes.configuration`:
 {
   "contributes": {
     "configuration": {
-      "title": "Copilot Proxy",
+      "title": "Copilot Gateway",
       "properties": {
-        "copilotProxy.port": {
+        "copilotGateway.port": {
           "type": "number",
-          "default": 8080,
+          "default": 8090,
           "description": "Port number for the proxy server"
         }
         // ... other settings
@@ -181,14 +184,14 @@ Settings are defined in `package.json` under `contributes.configuration`:
 **Read settings:**
 
 ```typescript
-const config = vscode.workspace.getConfiguration('copilotProxy');
-const port = config.get<number>('port', 8080);
+const config = vscode.workspace.getConfiguration('copilotGateway');
+const port = config.get<number>('port', 8090);
 ```
 
 **Update settings:**
 
 ```typescript
-const config = vscode.workspace.getConfiguration('copilotProxy');
+const config = vscode.workspace.getConfiguration('copilotGateway');
 await config.update('port', 9090, vscode.ConfigurationTarget.Global);
 ```
 
@@ -216,8 +219,8 @@ Settings can be modified via:
 ```json
 // .vscode/settings.json
 {
-    "copilotProxy.port": 9090,
-    "copilotProxy.autoStart": false
+    "copilotGateway.port": 9090,
+    "copilotGateway.autoStart": false
 }
 ```
 

@@ -8,6 +8,10 @@ A comprehensive catalog of all features in the VS Code Copilot Proxy extension.
 
 | Date | Feature | Description |
 |------|---------|-------------|
+| 2026-10-30 | Codex Responses and Gateway Identity | Recovered Auditable source; JSON/SSE, namespaces/freeform tools, native reasoning/compaction forwarding, model catalog; independent Copilot Gateway package/commands/settings/icon |
+| 2026-10-30 | Claude Desktop Gateway | Native gateway setup and exact-file restoration with preserved preferences, registry entries, and per-directory backups; Codex compatibility guide |
+| 2026-10-30 | Connection Guide | API guide for all routes and aliases, plus client-specific setup examples with safe copy controls |
+| 2026-10-30 | API Key Management | Mandatory authentication with SecretStorage, masked reveal/hide, copy, paste/save, and confirmed key rotation |
 | 2026-06-09 | Stats by Model | Per-model session/lifetime request breakdown table in webview, shown under the main Stats section; auto-hidden until per-model data exists |
 | 2026-06-09 | Copilot Resilience | Stale-session retry with model refresh, worker-OOM detection with reload prompt, and model-cache TTL refresh to keep idle proxies usable |
 | 2026-05-05 | Stats Section | Session and lifetime request stats (totals, errors, API split, chars, avg duration) shown in webview below Endpoints; lifetime persists in globalState |

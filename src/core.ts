@@ -1,5 +1,5 @@
 /**
- * Core utility functions for the Copilot Proxy extension.
+ * Core utility functions for the Copilot Gateway extension.
  * These are pure functions that can be easily unit tested.
  *
  * @see docs/features/copilot-proxy/design.md - Core proxy architecture
@@ -64,7 +64,7 @@ export function isLocalhostOrigin(origin: string | undefined): boolean {
 export function getCorsHeaders(origin: string | undefined): Record<string, string> {
     const headers: Record<string, string> = {
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key',
         'Access-Control-Max-Age': '86400'
     };
 
@@ -84,7 +84,7 @@ export function getCorsHeaders(origin: string | undefined): Record<string, strin
 export const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key',
     'Access-Control-Max-Age': '86400'
 } as const;
 

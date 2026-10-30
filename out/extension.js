@@ -1,6 +1,6 @@
 "use strict";
 /**
- * VS Code Copilot Proxy Extension
+ * VS Code Copilot Gateway Extension
  *
  * Exposes an OpenAI-compatible HTTP API that proxies requests through
  * VS Code's Language Model API (GitHub Copilot).
@@ -47,12 +47,51 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const http = __importStar(require("http"));
+const apiKey_1 = require("./apiKey");
+const connectionGuide_1 = require("./connectionGuide");
+const claudeGateway_1 = require("./claudeGateway");
+const handler_1 = require("./responses/handler");
+const vscodeAdapter_1 = require("./responses/vscodeAdapter");
+const direct_1 = require("./responses/backends/direct");
+const normalize_1 = require("./responses/normalize");
+const errors_1 = require("./responses/errors");
+const catalog_1 = require("./responses/catalog");
+let directResponses;
+let directSecrets = [];
+function getDirectResponses() {
+    if (!directResponses) {
+        const versions = { editor: vscode.version, plugin: vscode.extensions.getExtension('GitHub.copilot-chat')?.packageJSON.version || 'unknown' };
+        const auth = new direct_1.CopilotAuth(async () => {
+            const session = await vscode.authentication.getSession('github', ['read:user'], { silent: true });
+            return session?.accessToken || '';
+        }, fetch, values => { directSecrets = values; }, versions);
+        directResponses = new direct_1.DirectBackend(auth, fetch, versions);
+    }
+    return directResponses;
+}
+async function nativeResponses(path, raw, signal, method) {
+    if (raw !== undefined) {
+        const request = (0, normalize_1.object)(raw, 'request');
+        if (request.model !== undefined && typeof request.model !== 'string')
+            throw new errors_1.ProxyError(400, 'model must be a string.');
+        if (!request.model) {
+            const configured = vscode.workspace.getConfiguration('copilotGateway').get('defaultModel', '');
+            const models = await getDirectResponses().listModels(signal);
+            request.model = configured || models.find(model => model.kind !== 'embedding')?.id;
+            if (!request.model)
+                throw new errors_1.ProxyError(503, 'No native Copilot models available.', 'service_unavailable');
+        }
+    }
+    return getDirectResponses().nativeRequest(path, raw, signal, {}, method);
+}
 const core_1 = require("./core");
 let server = null;
 const activeSockets = new Set();
 let statusBarItem;
 let outputChannel;
 let statusPanel;
+let apiKeys;
+let replacingApiKey = false;
 // Visual symbols for log messages
 const LOG_SYMBOLS = {
     startup: '🚀',
@@ -73,7 +112,7 @@ const LOG_SYMBOLS = {
 const MAX_REQUEST_LOGS = 50;
 let requestLogs = [];
 // Stats counters: session resets on activate; lifetime persists in globalState.
-const LIFETIME_STATS_KEY = 'copilotProxy.lifetimeStats';
+const LIFETIME_STATS_KEY = 'copilotGateway.lifetimeStats';
 let extensionContext;
 const sessionStats = (0, core_1.emptyStats)();
 let lifetimeStats = (0, core_1.emptyStats)();
@@ -96,22 +135,22 @@ function addRequestLog(entry) {
 }
 function log(message, symbol) {
     const prefix = symbol ? `${LOG_SYMBOLS[symbol]} ` : '';
-    console.log(`[Copilot Proxy] ${message}`);
+    console.log(`[Copilot Gateway] ${message}`);
     outputChannel?.info(`${prefix}${message}`);
 }
 function logWarn(message, symbol) {
     const prefix = symbol ? `${LOG_SYMBOLS[symbol]} ` : `${LOG_SYMBOLS.warning} `;
-    console.warn(`[Copilot Proxy] ${message}`);
+    console.warn(`[Copilot Gateway] ${message}`);
     outputChannel?.warn(`${prefix}${message}`);
 }
 function logError(message, error) {
     const errorDetails = error instanceof Error ? error.message : String(error ?? '');
     const fullMessage = errorDetails ? `${message} - ${errorDetails}` : message;
-    console.error(`[Copilot Proxy] ERROR: ${message}`, error);
+    console.error(`[Copilot Gateway] ERROR: ${message}`, error);
     outputChannel?.error(`${LOG_SYMBOLS.error} ${fullMessage}`);
 }
 function logRaw(label, content) {
-    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const config = vscode.workspace.getConfiguration('copilotGateway');
     if (!config.get('rawLogging', false))
         return;
     const separator = '━'.repeat(50);
@@ -205,7 +244,7 @@ function notifyCopilotWorkerOOM() {
     if (oomReloadPromptShown)
         return;
     oomReloadPromptShown = true;
-    void vscode.window.showErrorMessage('Copilot Proxy: the language model worker ran out of memory and is now unavailable. Reduce request size; reload the window to recover.', 'Reload Window').then(choice => {
+    void vscode.window.showErrorMessage('Copilot Gateway: the language model worker ran out of memory and is now unavailable. Reduce request size; reload the window to recover.', 'Reload Window').then(choice => {
         if (choice === 'Reload Window') {
             void vscode.commands.executeCommand('workbench.action.reloadWindow');
         }
@@ -273,7 +312,7 @@ async function getModel(requestedModel) {
         await refreshModels();
     }
     // Get default model from VS Code config if no model specified
-    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const config = vscode.workspace.getConfiguration('copilotGateway');
     const defaultModel = config.get('defaultModel', '');
     // Use findBestModel from core.ts for matching logic
     return (0, core_1.findBestModel)(requestedModel, cachedModels, defaultModel);
@@ -1502,11 +1541,25 @@ function createServer(_port) {
             res.end(JSON.stringify({ error: { message: 'Forbidden: non-localhost origin', type: 'forbidden' } }));
             return;
         }
+        if (!apiKeys.accepts(req.headers)) {
+            res.writeHead(401, { ...corsHeaders, 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
+            res.end(JSON.stringify({ error: { message: 'A valid API key is required.', type: 'authentication_error' } }));
+            return;
+        }
         const url = req.url || '';
         log(`${req.method} ${url}`, 'request');
         // Parse URL to extract path without query params for routing
         const urlPath = url.split('?')[0];
-        if (req.method === 'POST' && (urlPath === '/v1/chat/completions' || urlPath === '/chat/completions')) {
+        const direct = vscode.workspace.getConfiguration('copilotGateway').get('responsesBackend', 'vscode') === 'direct';
+        const responsePath = urlPath.replace(/^\/v1/, '');
+        if ((req.method === 'POST' && ['/responses', '/responses/compact'].includes(responsePath)) ||
+            (['GET', 'DELETE'].includes(req.method || '') && /^\/responses\/[A-Za-z0-9_-]{1,256}$/.test(responsePath))) {
+            await (0, handler_1.handleResponses)(req, res, corsHeaders, (turn, signal) => (0, vscodeAdapter_1.inferResponses)(turn, signal, getModel, sendRequestWithRetry, vscode), direct ? nativeResponses : undefined, text => directSecrets.reduce((result, secret) => secret ? result.split(secret).join('[redacted]') : result, text));
+        }
+        else if (direct && req.method === 'GET' && (responsePath === '/models' || /^\/models\/[A-Za-z0-9_.-]{1,256}$/.test(responsePath))) {
+            await (0, handler_1.handleResponses)(req, res, corsHeaders, (turn, signal) => (0, vscodeAdapter_1.inferResponses)(turn, signal, getModel, sendRequestWithRetry, vscode), nativeResponses, text => directSecrets.reduce((result, secret) => secret ? result.split(secret).join('[redacted]') : result, text));
+        }
+        else if (req.method === 'POST' && (urlPath === '/v1/chat/completions' || urlPath === '/chat/completions')) {
             await handleChatCompletion(req, res);
         }
         else if (req.method === 'POST' && (urlPath === '/v1/messages' || urlPath === '/messages')) {
@@ -1527,14 +1580,21 @@ function createServer(_port) {
     });
 }
 async function startServer() {
+    try {
+        await apiKeys.initialize();
+    }
+    catch {
+        vscode.window.showErrorMessage('Copilot Gateway could not access API key storage. Server was not started.');
+        return;
+    }
     log('Starting server...', 'server');
     if (server) {
         logWarn('Server already running, skipping');
-        vscode.window.showInformationMessage('Copilot Proxy server is already running');
+        vscode.window.showInformationMessage('Copilot Gateway server is already running');
         return;
     }
-    const config = vscode.workspace.getConfiguration('copilotProxy');
-    const port = config.get('port', 8080);
+    const config = vscode.workspace.getConfiguration('copilotGateway');
+    const port = config.get('port', 8090);
     log(`Binding to port ${port}...`, 'server');
     server = createServer(port);
     // Configure server-level timeouts
@@ -1564,7 +1624,7 @@ async function startServer() {
             const ctx = m.maxInputTokens?.toLocaleString() ?? '?';
             log(`  └─ ${m.name} (${m.id}): ${ctx} tokens`);
         }
-        vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
+        vscode.window.showInformationMessage(`Copilot Gateway server started on port ${port}`);
         updateStatusBar(port);
         updateStatusPanel();
     });
@@ -1591,29 +1651,30 @@ function stopServer() {
         activeSockets.clear();
         server.close(() => {
             log('Server stopped', 'server');
-            vscode.window.showInformationMessage('Copilot Proxy server stopped');
+            vscode.window.showInformationMessage('Copilot Gateway server stopped');
         });
         server = null;
         updateStatusBar();
         updateStatusPanel();
     }
     else {
-        vscode.window.showInformationMessage('Copilot Proxy server is not running');
+        vscode.window.showInformationMessage('Copilot Gateway server is not running');
     }
 }
 function updateStatusBar(port) {
     if (!statusBarItem)
         return;
     if (port) {
-        statusBarItem.text = `$(radio-tower) Copilot Proxy: ${port}`;
-        statusBarItem.tooltip = `Copilot Proxy running on port ${port}\n${cachedModels.length} model(s) available\nClick to show status`;
+        statusBarItem.text = `$(radio-tower) Copilot Gateway: ${port}`;
+        statusBarItem.tooltip = `Copilot Gateway running on port ${port}\n${cachedModels.length} model(s) available\nClick to show status`;
     }
     else {
-        statusBarItem.text = `$(circle-slash) Copilot Proxy: Off`;
-        statusBarItem.tooltip = 'Copilot Proxy is not running\nClick to show status';
+        statusBarItem.text = `$(circle-slash) Copilot Gateway: Off`;
+        statusBarItem.tooltip = 'Copilot Gateway is not running\nClick to show status';
     }
 }
 function getWebviewContent(isRunning, port, models, settings, logs = [], session = (0, core_1.emptyStats)(), lifetime = (0, core_1.emptyStats)()) {
+    const guide = (0, connectionGuide_1.getConnectionGuide)(port, models, settings?.defaultModel);
     const statusColor = isRunning ? '#4caf50' : '#9e9e9e';
     const statusText = isRunning ? `Running on 127.0.0.1:${port}` : 'Stopped';
     const buttonText = isRunning ? 'Stop Server' : 'Start Server';
@@ -1635,7 +1696,8 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
     `).join('');
     const endpoints = isRunning ? `
         <div class="section">
-            <div class="section-header">Endpoints</div>
+            <div class="section-header">Quick endpoints</div>
+            <p class="guide-note">Open API guide for every route, aliases, request examples, and responses.</p>
             <div class="endpoints">
                 <div class="endpoint">
                     <span class="method post">POST</span>
@@ -1853,7 +1915,7 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Copilot Proxy Status</title>
+    <title>Copilot Gateway Status</title>
     <style>
         * {
             box-sizing: border-box;
@@ -2119,6 +2181,10 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
             font-family: var(--vscode-editor-font-family);
             font-size: 13px;
         }
+        .api-key-input { width: 100%; box-sizing: border-box; }
+        .api-key-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .api-key-actions button:disabled { opacity: 0.5; cursor: default; }
+        #apiKeyHelp { color: var(--vscode-descriptionForeground); }
         .setting-input:focus {
             outline: 1px solid var(--vscode-focusBorder);
             outline-offset: -1px;
@@ -2245,15 +2311,22 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
         .logs-table tr.status-error {
             background: rgba(244, 67, 54, 0.1);
         }
+        ${connectionGuide_1.connectionGuideStyles}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <span class="title">Copilot Proxy</span>
-            <button class="secondary-btn" id="logsBtn">📋 View Logs</button>
+            <h1 class="title">Copilot Gateway</h1>
+            <button class="secondary-btn" id="logsBtn">View Logs</button>
         </div>
 
+        <nav class="guide-tabs" role="tablist" aria-label="Proxy workspace">
+            <button id="tab-overview" class="guide-tab" role="tab" data-guide-tab="overview" aria-selected="true" aria-controls="panel-overview">Overview</button>
+            <button id="tab-api" class="guide-tab" role="tab" data-guide-tab="api" aria-selected="false" aria-controls="panel-api" tabindex="-1">API guide</button>
+            <button id="tab-clients" class="guide-tab" role="tab" data-guide-tab="clients" aria-selected="false" aria-controls="panel-clients" tabindex="-1">Client setup</button>
+        </nav>
+        <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
         <div class="main-layout">
             <div class="left-column">
                 <div class="section">
@@ -2274,6 +2347,22 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
             <div class="right-column">
                 ${settingsSection}
 
+                <div class="section">
+                    <div class="section-header">API Key</div>
+                    <label class="setting-label" for="apiKeyInput">Saved key or replacement</label>
+                    <input id="apiKeyInput" class="setting-input api-key-input" type="password"
+                        autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="apiKeyHelp"
+                        placeholder="Key saved securely. Paste a replacement to change it." />
+                    <p id="apiKeyHelp">Required for all requests. Use Bearer authorization or x-api-key. Saving or generating a key disconnects clients using the old key.</p>
+                    <div class="api-key-actions">
+                        <button class="secondary-btn" id="revealApiKeyBtn" aria-pressed="false">Reveal</button>
+                        <button class="secondary-btn" id="copyApiKeyBtn">Copy Saved Key</button>
+                        <button class="secondary-btn" id="saveApiKeyBtn" disabled>Save</button>
+                        <button class="secondary-btn" id="generateApiKeyBtn">Generate New Key</button>
+                    </div>
+                    <p id="apiKeyStatus" role="status" aria-live="polite"></p>
+                </div>
+
                 <div class="status-row">
                     <div class="status-indicator">
                         <div class="status-dot"></div>
@@ -2291,10 +2380,52 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
         </div>
 
         ${logsSection}
+        </section>
+        <section id="panel-api" role="tabpanel" aria-labelledby="tab-api" tabindex="0" hidden>${guide.api}</section>
+        <section id="panel-clients" role="tabpanel" aria-labelledby="tab-clients" tabindex="0" hidden>${guide.setup}</section>
     </div>
 
     <script>
         const vscode = acquireVsCodeApi();
+
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const revealApiKeyBtn = document.getElementById('revealApiKeyBtn');
+        const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+        let apiKeyEdited = false;
+        let revealPending = false;
+        function hideApiKey() {
+            revealPending = false;
+            apiKeyInput.type = 'password';
+            revealApiKeyBtn.textContent = 'Reveal';
+            revealApiKeyBtn.setAttribute('aria-pressed', 'false');
+        }
+        apiKeyInput.addEventListener('input', () => {
+            apiKeyEdited = true;
+            saveApiKeyBtn.disabled = !apiKeyInput.value;
+        });
+        revealApiKeyBtn.addEventListener('click', () => {
+            if (apiKeyInput.type === 'text' || revealPending) {
+                hideApiKey();
+            } else if (apiKeyInput.value) {
+                apiKeyInput.type = 'text';
+                revealApiKeyBtn.textContent = 'Hide';
+                revealApiKeyBtn.setAttribute('aria-pressed', 'true');
+            } else {
+                revealPending = true;
+                vscode.postMessage({ command: 'revealApiKey' });
+            }
+        });
+        document.getElementById('copyApiKeyBtn').addEventListener('click', () => {
+            vscode.postMessage({ command: 'copyApiKey' });
+        });
+        saveApiKeyBtn.addEventListener('click', () => {
+            hideApiKey();
+            vscode.postMessage({ command: 'saveApiKey', value: apiKeyInput.value });
+        });
+        document.getElementById('generateApiKeyBtn').addEventListener('click', () => {
+            hideApiKey();
+            vscode.postMessage({ command: 'generateApiKey' });
+        });
 
         document.getElementById('actionBtn').addEventListener('click', () => {
             vscode.postMessage({ command: '${buttonCommand}' });
@@ -2361,11 +2492,29 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
         // Listen for messages from extension
         window.addEventListener('message', event => {
             const message = event.data;
+            if (message.command === 'apiKeyValue' && revealPending && !apiKeyEdited) {
+                revealPending = false;
+                apiKeyInput.value = message.value;
+                apiKeyInput.type = 'text';
+                revealApiKeyBtn.textContent = 'Hide';
+                revealApiKeyBtn.setAttribute('aria-pressed', 'true');
+            }
+            if (message.command === 'apiKeyResult') {
+                document.getElementById('apiKeyStatus').textContent = message.text;
+                if (message.saved) {
+                    apiKeyInput.value = '';
+                    apiKeyEdited = false;
+                    saveApiKeyBtn.disabled = true;
+                    hideApiKey();
+                }
+            }
             if (message.command === 'refreshComplete') {
                 const btn = document.getElementById('refreshModelsBtn');
                 if (btn) btn.classList.remove('spinning');
             }
         });
+
+        ${connectionGuide_1.connectionGuideScript}
 
         document.querySelectorAll('.copy-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
@@ -2383,6 +2532,55 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
 </body>
 </html>`;
 }
+let configuringGateway = false;
+async function configureClaudeDesktop(restore = false) {
+    if (configuringGateway)
+        return;
+    configuringGateway = true;
+    try {
+        if (vscode.env.remoteName)
+            throw new Error('Run gateway setup in a local VS Code window, on the machine running Claude Desktop.');
+        const directories = await (0, claudeGateway_1.getClaudeGatewayDirectories)();
+        const config = vscode.workspace.getConfiguration('copilotGateway');
+        const root = `http://127.0.0.1:${config.get('port', 8090)}`;
+        let model = '';
+        if (!restore) {
+            await refreshModels();
+            const choices = cachedModels.map(model => ({ label: model.id, description: model.name }));
+            if (!choices.length)
+                throw new Error('No models available. Sign into Copilot and refresh models before setup.');
+            const defaultModel = config.get('defaultModel', '');
+            choices.sort((a, b) => Number(b.label === defaultModel) - Number(a.label === defaultModel));
+            const selected = await vscode.window.showQuickPick(choices, { title: 'Claude Desktop gateway model' });
+            if (!selected)
+                return;
+            model = selected.label;
+            await apiKeys.initialize();
+        }
+        const action = restore ? 'Restore configuration' : 'Configure gateway';
+        const confirmed = await vscode.window.showWarningMessage(`${action}? Fully quit Claude Desktop first. ${restore ? 'Restore the original three configuration files from the first setup backup; later edits to those files will be replaced.' : `Gateway: ${root}/. Model: ${model}. The saved proxy key will be written to local JSON.`}\n\n${directories.join('\n')}`, { modal: true }, action);
+        if (confirmed !== action)
+            return;
+        let changed = false;
+        for (const directory of directories) {
+            if (restore)
+                changed = await (0, claudeGateway_1.restoreClaudeGateway)(directory) || changed;
+            else {
+                await (0, claudeGateway_1.setupClaudeGateway)(directory, root, apiKeys.savedKey, model);
+                changed = true;
+            }
+        }
+        vscode.window.showInformationMessage(changed ? 'Claude Desktop configuration updated. Relaunch Claude Desktop.' : 'No Copilot Gateway gateway backup found. Nothing restored.');
+    }
+    catch (error) {
+        // Never expose raw filesystem/JSON errors, which may contain credentials.
+        const safe = error instanceof Error && /^(Run gateway|No models)/.test(error.message) ? error.message : 'Gateway setup failed. Check configuration file permissions and valid JSON. Any completed directory can be restored using Restore previous configuration.';
+        vscode.window.showErrorMessage(safe);
+    }
+    finally {
+        configuringGateway = false;
+    }
+}
 async function showStatus() {
     await refreshModels();
     // If panel already exists, reveal it and update content
@@ -2392,7 +2590,7 @@ async function showStatus() {
         return;
     }
     // Create new webview panel
-    statusPanel = vscode.window.createWebviewPanel('copilotProxyStatus', 'Copilot Proxy', vscode.ViewColumn.One, {
+    statusPanel = vscode.window.createWebviewPanel('copilotGatewayStatus', 'Copilot Gateway', vscode.ViewColumn.One, {
         enableScripts: true,
         retainContextWhenHidden: true
     });
@@ -2401,6 +2599,64 @@ async function showStatus() {
     // Handle messages from webview
     statusPanel.webview.onDidReceiveMessage(async (message) => {
         switch (message.command) {
+            case 'setupClaudeGateway':
+            case 'restoreClaudeGateway':
+                await configureClaudeDesktop(message.command === 'restoreClaudeGateway');
+                break;
+            case 'copyGuide':
+                try {
+                    if (typeof message.text !== 'string' || message.text.length > 20000)
+                        break;
+                    await vscode.env.clipboard.writeText(message.text);
+                    statusPanel?.webview.postMessage({ command: 'guideCopyResult', text: 'Copied. Replace any key placeholders before running.' });
+                    vscode.window.showInformationMessage('Copied connection example');
+                }
+                catch {
+                    statusPanel?.webview.postMessage({ command: 'guideCopyResult', text: 'Could not copy. Select the example and copy it manually.' });
+                    vscode.window.showErrorMessage('Could not copy connection example. Select and copy the text manually.');
+                }
+                break;
+            case 'revealApiKey':
+            case 'copyApiKey':
+                try {
+                    await apiKeys.initialize();
+                    if (message.command === 'copyApiKey') {
+                        await vscode.env.clipboard.writeText(apiKeys.savedKey);
+                        statusPanel?.webview.postMessage({ command: 'apiKeyResult', text: 'Saved key copied.' });
+                    }
+                    else {
+                        statusPanel?.webview.postMessage({ command: 'apiKeyValue', value: apiKeys.savedKey });
+                    }
+                }
+                catch {
+                    statusPanel?.webview.postMessage({ command: 'apiKeyResult', text: 'Unable to access the saved key or clipboard.' });
+                }
+                break;
+            case 'saveApiKey':
+            case 'generateApiKey': {
+                if (replacingApiKey)
+                    break;
+                replacingApiKey = true;
+                try {
+                    await apiKeys.initialize();
+                    const value = message.command === 'generateApiKey' ? (0, apiKey_1.generateApiKey)() : message.value;
+                    (0, apiKey_1.validateApiKey)(value);
+                    const confirmed = await vscode.window.showWarningMessage('Replace the API key? Clients using the old key will need to be updated.', { modal: true }, 'Replace Key');
+                    if (confirmed !== 'Replace Key') {
+                        statusPanel?.webview.postMessage({ command: 'apiKeyResult', text: 'Key replacement cancelled.' });
+                        break;
+                    }
+                    await apiKeys.replace(value);
+                    statusPanel?.webview.postMessage({ command: 'apiKeyResult', saved: true, text: 'New key saved. Update your clients; use Copy Saved Key to copy it.' });
+                }
+                catch {
+                    statusPanel?.webview.postMessage({ command: 'apiKeyResult', text: 'Key not changed. Use 16-256 visible ASCII characters without spaces and ensure secure storage is available.' });
+                }
+                finally {
+                    replacingApiKey = false;
+                }
+                break;
+            }
             case 'start':
                 await startServer();
                 updateStatusPanel();
@@ -2417,18 +2673,18 @@ async function showStatus() {
                 if (outputChannel) {
                     outputChannel.show(false);
                     // Also execute command to ensure Output panel is visible and focused
-                    vscode.commands.executeCommand('workbench.action.output.show.extension-output-local.vscode-copilot-proxy-#1-Copilot Proxy');
+                    vscode.commands.executeCommand('workbench.action.output.focus');
                 }
                 break;
             case 'openSettings':
-                vscode.commands.executeCommand('workbench.action.openSettings', 'copilotProxy');
+                vscode.commands.executeCommand('workbench.action.openSettings', 'copilotGateway');
                 break;
             case 'updateSetting': {
-                const config = vscode.workspace.getConfiguration('copilotProxy');
+                const config = vscode.workspace.getConfiguration('copilotGateway');
                 await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
                 log(`Setting updated: ${message.key} = ${message.value}`);
-                // Refresh panel if logging setting changed
-                if (message.key === 'logRequestsToUI') {
+                // Connection examples follow the selected port and default model.
+                if (['logRequestsToUI', 'port', 'defaultModel'].includes(message.key)) {
                     updateStatusPanel();
                 }
                 break;
@@ -2456,8 +2712,8 @@ async function showStatus() {
 function updateStatusPanel() {
     if (!statusPanel)
         return;
-    const config = vscode.workspace.getConfiguration('copilotProxy');
-    const port = config.get('port', 8080);
+    const config = vscode.workspace.getConfiguration('copilotGateway');
+    const port = config.get('port', 8090);
     const autoStart = config.get('autoStart', true);
     const defaultModel = config.get('defaultModel', '');
     const logRequestsToUI = config.get('logRequestsToUI', false);
@@ -2483,23 +2739,36 @@ function updateStatusPanel() {
     statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings, logRequestsToUI ? requestLogs : [], sessionStats, lifetimeStats);
 }
 function activate(context) {
+    if (vscode.authentication?.onDidChangeSessions) {
+        context.subscriptions.push(vscode.authentication.onDidChangeSessions(event => {
+            if (event.provider.id === 'github') {
+                directResponses?.dispose();
+                directResponses = undefined;
+                directSecrets = [];
+            }
+        }));
+    }
     extensionContext = context;
+    apiKeys = new apiKey_1.ApiKeyManager(context.secrets);
+    void apiKeys.initialize().catch(() => {
+        vscode.window.showErrorMessage('Copilot Gateway could not access API key storage. Requests will not be accepted.');
+    });
     // Restore lifetime stats from globalState (merge into seed shape so new fields default to 0)
     const stored = context.globalState.get(LIFETIME_STATS_KEY);
     if (stored) {
         lifetimeStats = { ...(0, core_1.emptyStats)(), ...stored };
     }
     // Create log output channel (supports colored log levels)
-    outputChannel = vscode.window.createOutputChannel('Copilot Proxy', { log: true });
+    outputChannel = vscode.window.createOutputChannel('Copilot Gateway', { log: true });
     context.subscriptions.push(outputChannel);
     // Startup banner
     outputChannel.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    outputChannel.info('  🚀 Copilot Proxy Starting');
+    outputChannel.info('  🚀 Copilot Gateway Starting');
     outputChannel.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     log(`Version: ${context.extension.packageJSON.version || 'unknown'}`, 'info');
     // Log key settings
-    const startupConfig = vscode.workspace.getConfiguration('copilotProxy');
-    log(`Port: ${startupConfig.get('port', 8080)}`, 'info');
+    const startupConfig = vscode.workspace.getConfiguration('copilotGateway');
+    log(`Port: ${startupConfig.get('port', 8090)}`, 'info');
     log(`Request timeout: ${core_1.REQUEST_TIMEOUT_MS / 1000}s`, 'info');
     log(`Keep-alive timeout: ${core_1.KEEP_ALIVE_TIMEOUT_MS / 1000}s`, 'info');
     const defaultModel = startupConfig.get('defaultModel', '');
@@ -2508,19 +2777,39 @@ function activate(context) {
     }
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.command = 'copilot-proxy.status';
-    statusBarItem.text = '$(circle-slash) Copilot Proxy: Off';
+    statusBarItem.command = 'copilot-gateway.status';
+    statusBarItem.text = '$(circle-slash) Copilot Gateway: Off';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
     // Register commands
-    context.subscriptions.push(vscode.commands.registerCommand('copilot-proxy.start', startServer), vscode.commands.registerCommand('copilot-proxy.stop', stopServer), vscode.commands.registerCommand('copilot-proxy.status', showStatus));
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-gateway.start', startServer), vscode.commands.registerCommand('copilot-gateway.stop', stopServer), vscode.commands.registerCommand('copilot-gateway.status', showStatus), vscode.commands.registerCommand('copilot-gateway.setupClaudeGateway', () => configureClaudeDesktop()), vscode.commands.registerCommand('copilot-gateway.restoreClaudeGateway', () => configureClaudeDesktop(true)), vscode.commands.registerCommand('copilot-gateway.authorizeDirectResponses', async () => {
+        await vscode.authentication.getSession('github', ['read:user'], { createIfNone: true });
+        vscode.window.showInformationMessage('GitHub session authorized. Set copilotGateway.responsesBackend to direct to use native Responses.');
+    }), vscode.commands.registerCommand('copilot-gateway.exportCodexCatalog', async () => {
+        try {
+            const direct = vscode.workspace.getConfiguration('copilotGateway').get('responsesBackend', 'vscode') === 'direct';
+            await refreshModels();
+            const models = direct ? await getDirectResponses().listModels(AbortSignal.timeout(30000)) : cachedModels.map(model => ({
+                id: model.id, name: model.name, contextWindow: model.maxInputTokens,
+                capabilities: { images: 'unknown', tools: 'unknown', generationControls: false, usage: 'estimated' }
+            }));
+            const destination = await vscode.window.showSaveDialog({ saveLabel: 'Export Codex model catalog', filters: { JSON: ['json'] } });
+            if (!destination)
+                return;
+            await vscode.workspace.fs.writeFile(destination, Buffer.from(JSON.stringify((0, catalog_1.codexCatalog)(models), null, 2)));
+            vscode.window.showInformationMessage(`Catalog exported. Set model_catalog_json to ${JSON.stringify(destination.fsPath)} in Codex config.toml.`);
+        }
+        catch {
+            vscode.window.showErrorMessage('Could not export model catalog. Check Copilot sign-in and file permissions.');
+        }
+    }));
     // Listen for model changes
     context.subscriptions.push(vscode.lm.onDidChangeChatModels(() => {
         log('Chat models changed, refreshing...');
         refreshModels();
     }));
     // Auto-start if configured
-    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const config = vscode.workspace.getConfiguration('copilotGateway');
     const autoStart = config.get('autoStart', true);
     log(`Auto-start: ${autoStart}`, 'info');
     if (autoStart) {
@@ -2529,6 +2818,9 @@ function activate(context) {
     log('Extension activated', 'success');
 }
 function deactivate() {
+    directResponses?.dispose();
+    directResponses = undefined;
+    directSecrets = [];
     if (server) {
         for (const socket of activeSockets) {
             socket.destroy();

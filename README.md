@@ -1,15 +1,15 @@
-# Copilot Proxy
+# Copilot Gateway
 
 > **Turn your GitHub Copilot subscription into an OpenAI and Anthropic-compatible API** - Use any Copilot model with your favorite AI tools, frameworks, and applications without leaving VS Code.
 
 ## About
 
-Copilot Proxy is a VS Code extension that exposes GitHub Copilot's language models through local OpenAI-compatible and Anthropic-compatible API servers. This lets you leverage your existing Copilot subscription to power external applications, scripts, and tools - no additional API costs, just your Copilot subscription.
+Copilot Gateway is a VS Code extension that exposes GitHub Copilot's language models through local OpenAI-compatible and Anthropic-compatible API servers. This lets you leverage your existing Copilot subscription to power external applications, scripts, and tools - no additional API costs, just your Copilot subscription.
 
 Perfect for developers who want to use Copilot's models in custom workflows, automation scripts, or with tools that expect an OpenAI or Anthropic-compatible endpoint - including **Claude Code**.
 
 <p align="center">
-  <img src="images/CopilotProxy.png" alt="Copilot Proxy" width="600">
+  <img src="images/icon.png" alt="Copilot Gateway" width="128">
 </p>
 
 <p align="center">
@@ -67,15 +67,15 @@ Perfect for developers who want to use Copilot's models in custom workflows, aut
 
 The server starts automatically by default. You can also:
 
-- Use Command Palette: `Copilot Proxy: Start Server`
+- Use Command Palette: `Copilot Gateway: Start Server`
 - Click the status bar item to open the status panel
 
 ### Status Bar
 
 The status bar shows the current server state:
 
-- `$(radio-tower) Copilot Proxy: 8080` - Server running on port 8080
-- `$(circle-slash) Copilot Proxy: Off` - Server stopped
+- `$(radio-tower) Copilot Gateway: 8090` - Server running on port 8090
+- `$(circle-slash) Copilot Gateway: Off` - Server stopped
 
 Click the status bar item to open the interactive status panel.
 
@@ -90,7 +90,7 @@ The status panel provides:
 
 ### Output Logging
 
-View real-time logs in VS Code's Output panel (select "Copilot Proxy" from the dropdown):
+View real-time logs in VS Code's Output panel (select "Copilot Gateway" from the dropdown):
 
 - **Startup Info**: Extension version, port, endpoint URL, available models with token limits
 - **Request Logging**: Message count, character count, estimated tokens, model selection, streaming mode
@@ -100,11 +100,11 @@ View real-time logs in VS Code's Output panel (select "Copilot Proxy" from the d
 Example output:
 
 ```
-[10:30:15] === Copilot Proxy Starting ===
+[10:30:15] === Copilot Gateway Starting ===
 [10:30:15] Extension version: 0.0.2
-[10:30:15] Server started on 127.0.0.1:8080
-[10:30:15] Endpoint: http://127.0.0.1:8080/v1/chat/completions (OpenAI)
-[10:30:15] Endpoint: http://127.0.0.1:8080/v1/messages (Anthropic)
+[10:30:15] Server started on 127.0.0.1:8090
+[10:30:15] Endpoint: http://127.0.0.1:8090/v1/chat/completions (OpenAI)
+[10:30:15] Endpoint: http://127.0.0.1:8090/v1/messages (Anthropic)
 [10:30:15]   Model: GPT-4o (gpt-4o) - max 128000 tokens
 [10:30:15]   Model: Claude 3.5 Sonnet (claude-3.5-sonnet) - max 16384 tokens
 [10:30:20] Request: 3 messages, ~1500 chars (~375 tokens), model: gpt-4o, stream: true
@@ -144,7 +144,7 @@ py examples/vscode_llm_example_full.py
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `VSCODE_LLM_ENDPOINT` | `http://127.0.0.1:8080/v1/chat/completions` | Proxy endpoint URL |
+| `VSCODE_LLM_ENDPOINT` | `http://127.0.0.1:8090/v1/chat/completions` | Proxy endpoint URL |
 | `VSCODE_LLM_FALLBACK` | `true` | Enable/disable Anthropic fallback |
 | `ANTHROPIC_API_KEY` | (none) | Required for fallback support |
 
@@ -154,7 +154,7 @@ py examples/vscode_llm_example_full.py
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://127.0.0.1:8080/v1",
+    base_url="http://127.0.0.1:8090/v1",
     api_key="not-needed"  # Any value works
 )
 
@@ -171,7 +171,7 @@ print(response.choices[0].message.content)
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://127.0.0.1:8080/v1",
+    base_url="http://127.0.0.1:8090/v1",
     api_key="not-needed"
 )
 
@@ -189,7 +189,7 @@ for chunk in stream:
 ### With curl (streaming)
 
 ```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
+curl http://127.0.0.1:8090/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3.5-sonnet",
@@ -201,7 +201,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ### With Node.js
 
 ```javascript
-const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
+const response = await fetch('http://127.0.0.1:8090/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -220,7 +220,7 @@ You can use the proxy to run [Claude Code](https://docs.anthropic.com/en/docs/cl
 **PowerShell:**
 
 ```powershell
-$env:ANTHROPIC_BASE_URL = 'http://127.0.0.1:8080'
+$env:ANTHROPIC_BASE_URL = 'http://127.0.0.1:8090'
 $env:ANTHROPIC_MODEL = 'claude-opus-4.6'
 $env:ANTHROPIC_AUTH_TOKEN = 'a'
 $env:ANTHROPIC_API_KEY = 'a'
@@ -230,14 +230,35 @@ claude
 **Bash/Zsh:**
 
 ```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8090"
 export ANTHROPIC_MODEL="claude-opus-4.6"
 export ANTHROPIC_AUTH_TOKEN="a"
 export ANTHROPIC_API_KEY="a"
 claude
 ```
 
-> **Note:** The `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` values can be anything - the proxy doesn't validate them. The `ANTHROPIC_MODEL` should be a valid Anthropic model name that Claude Code recognizes. The proxy maps all requests to the best available Copilot model (or the model configured in `copilotProxy.defaultModel`).
+> **Note:** The `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` values can be anything - the proxy doesn't validate them. The `ANTHROPIC_MODEL` should be a valid Anthropic model name that Claude Code recognizes. The proxy maps all requests to the best available Copilot model (or the model configured in `copilotGateway.defaultModel`).
+
+### With Codex
+
+Open **Copilot Gateway: Show Status > Client setup > Codex** for a configuration reference using your configured port and model.
+
+Codex connects directly using the Responses API (`wire_api = "responses"`). JSON/SSE, function and custom tool calls, namespaced tools, and freeform `apply_patch` are supported. Run **Copilot Gateway: Export Codex Model Catalog** and use the generated catalog in your Codex configuration. See [the Codex setup guide](docs/CODEX_SETUP.md).
+
+The default `copilotGateway.responsesBackend = "vscode"` uses public VS Code models with complete history and local compaction. Optional `"direct"` mode forwards native Copilot Responses, including reasoning history, hosted tools, and remote compaction when supported upstream. Run **Copilot Gateway: Authorize Native Codex Responses** before enabling direct mode. Client tools continue to run in Codex.
+
+This extension has a separate identity (`local-copilot.copilot-gateway`), `copilot-gateway.*` commands, `copilotGateway.*` settings, and its own saved key. Its default port is **8090**, separate from the original fork's 8080 and Auditable Copilot Proxy's 4242.
+
+### With Claude Desktop
+
+1. Install Claude Desktop, then fully quit it (including the tray process).
+2. Start Copilot Gateway and open **Show Status > Client setup > Claude Desktop**.
+3. Select **Configure gateway**, choose an available model, and review the local paths and configuration before applying.
+4. Relaunch Claude Desktop and select the configured model.
+
+The extension writes the saved proxy key and Anthropic root URL to Claude Desktop's third-party gateway configuration. No Ollama or Python is required. Windows legacy and Store installations, macOS, and Linux paths are supported. Run this from a local VS Code window on the machine running Claude Desktop.
+
+**Restore previous configuration** restores the original files backed up at first setup. Configure again after rotating your proxy key. See [the Claude Desktop setup guide](docs/CLAUDE_DESKTOP_SETUP.md) for paths, restoration behavior, and compatibility limits. The gateway schema is based on [Claude-Desktop-Router's setup script](https://github.com/mohitsoni48/Claude-Desktop-Router/blob/master/setup-claude-gateway.py).
 
 ### With Anthropic Python SDK
 
@@ -245,7 +266,7 @@ claude
 import anthropic
 
 client = anthropic.Anthropic(
-    base_url="http://127.0.0.1:8080",
+    base_url="http://127.0.0.1:8090",
     api_key="not-needed"  # Any value works
 )
 
@@ -260,7 +281,7 @@ print(message.content[0].text)
 ### With curl (Anthropic format)
 
 ```bash
-curl -X POST http://127.0.0.1:8080/v1/messages \
+curl -X POST http://127.0.0.1:8090/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: a" \
   -d '{
@@ -276,7 +297,7 @@ curl -X POST http://127.0.0.1:8080/v1/messages \
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
-    base_url="http://127.0.0.1:8080/v1",
+    base_url="http://127.0.0.1:8090/v1",
     api_key="not-needed",
     model="claude-3.5-sonnet"
 )
@@ -289,12 +310,14 @@ print(response.content)
 
 Once running, the following endpoints are available:
 
+For an interactive reference, run **Copilot Gateway: Show Status** and open **API guide**. It covers every route and alias, authentication, request/response shapes, and copyable examples, even when the server is stopped. **Client setup** includes Codex compatibility guidance, Claude Desktop gateway setup, OpenAI Python/JavaScript, Claude Code (PowerShell/Bash), Anthropic Python, Cline/Roo Code, and LangChain. Examples follow the configured port and default model; replace key placeholders with the saved proxy key. Claude Desktop configuration is changed only when you explicitly apply gateway setup.
+
 ### POST `/v1/messages`
 
 Anthropic-compatible messages endpoint. Works with the Anthropic SDK and Claude Code.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/v1/messages \
+curl -X POST http://127.0.0.1:8090/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: a" \
   -d '{
@@ -342,7 +365,7 @@ curl -X POST http://127.0.0.1:8080/v1/messages \
 OpenAI-compatible chat completions endpoint.
 
 ```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
+curl http://127.0.0.1:8090/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3.5-sonnet",
@@ -392,7 +415,7 @@ Server-Sent Events (SSE) format compatible with OpenAI's streaming API.
 List available models.
 
 ```bash
-curl http://127.0.0.1:8080/v1/models
+curl http://127.0.0.1:8090/v1/models
 ```
 
 **Response:**
@@ -420,7 +443,7 @@ curl http://127.0.0.1:8080/v1/models
 Health check endpoint.
 
 ```bash
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8090/health
 ```
 
 **Response:**
@@ -438,13 +461,13 @@ List available tools from VS Code (built-in, extensions, and MCP servers).
 
 ```bash
 # List all tools
-curl http://127.0.0.1:8080/v1/tools
+curl http://127.0.0.1:8090/v1/tools
 
 # Filter by tags
-curl "http://127.0.0.1:8080/v1/tools?tags=vscode,editor"
+curl "http://127.0.0.1:8090/v1/tools?tags=vscode,editor"
 
 # Filter by name pattern
-curl "http://127.0.0.1:8080/v1/tools?name=get_*"
+curl "http://127.0.0.1:8090/v1/tools?name=get_*"
 ```
 
 **Response:**
@@ -473,7 +496,7 @@ In pass-through mode, the proxy returns tool calls to your application. You exec
 
 ```bash
 # Step 1: Send request with tools
-curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8090/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3.5-sonnet",
@@ -504,7 +527,7 @@ See `examples/vscode_llm_tools_simple.py` for a complete pass-through example.
 In auto-execute mode, the proxy handles tool execution using VS Code's registered tools. You just send a request and get the final answer.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8090/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3.5-sonnet",
@@ -559,19 +582,19 @@ py examples/vscode_llm_tools_auto.py
 
 ## Configuration
 
-Settings available in VS Code Settings (search for "Copilot Proxy"):
+Settings available in VS Code Settings (search for "Copilot Gateway"):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `copilotProxy.port` | `8080` | Port number for the proxy server |
-| `copilotProxy.autoStart` | `true` | Automatically start when VS Code opens |
-| `copilotProxy.defaultModel` | `""` | Default model when not specified in request (leave empty for first available) |
+| `copilotGateway.port` | `8090` | Port number for the proxy server |
+| `copilotGateway.autoStart` | `true` | Automatically start when VS Code opens |
+| `copilotGateway.defaultModel` | `""` | Default model when not specified in request (leave empty for first available) |
 
 ## Commands
 
-- `Copilot Proxy: Start Server` - Start the proxy server
-- `Copilot Proxy: Stop Server` - Stop the proxy server
-- `Copilot Proxy: Show Status` - Open the interactive status panel
+- `Copilot Gateway: Start Server` - Start the proxy server
+- `Copilot Gateway: Stop Server` - Stop the proxy server
+- `Copilot Gateway: Show Status` - Open the interactive status panel
 
 ## Limitations
 
@@ -583,7 +606,7 @@ Settings available in VS Code Settings (search for "Copilot Proxy"):
 
 ## Security
 
-Copilot Proxy is designed for local development use. The following security considerations apply:
+Copilot Gateway is designed for local development use. The following security considerations apply:
 
 ### Localhost-Only Binding
 
@@ -593,21 +616,31 @@ The server binds to `127.0.0.1` (localhost) by default. This means:
 - The server is not accessible from other devices on your network
 - This is intentional to prevent unauthorized access
 
-### No Authentication
+### API Key Authentication (Breaking Change)
 
-The API does not require authentication because:
+All endpoints, including `/health`, now require an API key. Only CORS preflight (`OPTIONS`) requests are exempt. Existing clients must configure the key before making further requests.
 
-- It's designed for trusted local applications only
-- Your Copilot subscription credentials are managed securely by VS Code
-- Adding authentication would add friction without meaningful security benefit in a localhost context
+- Open **Copilot Gateway: Show Status** and select **Copy Saved Key** in the API Key section. Copy works while the key is hidden. Paste it into your client's API-key setting.
+- Keys are generated automatically and stored in VS Code SecretStorage, not ordinary settings. **Reveal/Hide** controls visibility; panel refreshes hide the key again.
+- To use your own key, paste 16-256 visible ASCII characters without spaces into the masked field, then select **Save**. Edits do not change the active key until confirmed and saved.
+- **Generate New Key** requires confirmation and immediately invalidates the previous key after a successful save. Update every client after rotation. Already-running requests are not cancelled.
+- If secure storage is unavailable, the server will not start. Failed replacement preserves the previous key.
+
+OpenAI-compatible clients should send `Authorization: Bearer <your-saved-key>`; Anthropic-compatible clients can send `x-api-key: <your-saved-key>`. Either header is accepted on all endpoints. For example, with the key in an environment variable:
+
+```powershell
+curl.exe http://127.0.0.1:8090/health -H "Authorization: Bearer $env:COPILOT_GATEWAY_API_KEY"
+```
+
+Treat the clipboard as sensitive: clear it after pasting if needed. No unauthenticated mode or key deletion is provided.
 
 ### CORS Configuration
 
-The server allows all origins (`Access-Control-Allow-Origin: *`) because:
+The server accepts browser origins on `localhost` and `127.0.0.1` only:
 
-- Browser-based local development tools need CORS headers
-- Localhost binding already limits access to local applications
-- Restrictive CORS would break integration with local web tools
+- Other browser origins are rejected for normal requests.
+- Preflight allows `Content-Type`, `Authorization`, and `x-api-key` headers for local development tools.
+- CORS does not replace API-key authentication.
 
 ### Request Limits
 
@@ -636,7 +669,7 @@ The following limits protect against resource exhaustion:
 
 ### "Port already in use"
 
-- Change the port in settings (`copilotProxy.port`)
+- Change the port in settings (`copilotGateway.port`)
 - Or stop whatever is using that port
 
 ### Model not found
@@ -647,7 +680,7 @@ The following limits protect against resource exhaustion:
 
 ### Check the Logs
 
-Open VS Code's Output panel and select "Copilot Proxy" from the dropdown to see detailed logs including:
+Open VS Code's Output panel and select "Copilot Gateway" from the dropdown to see detailed logs including:
 
 - All errors with timestamps
 - Request/response details

@@ -1,16 +1,16 @@
 {
-  "name": "vscode-copilot-proxy",
-  "displayName": "VS Code Copilot Proxy",
-  "publisher": "RatajikSoftware",
-  "description": "Proxy requests from external agents through VS Code Copilot models",
+  "name": "copilot-gateway",
+  "displayName": "Copilot Gateway",
+  "publisher": "local-copilot",
+  "description": "Independent local Copilot gateway for Codex Responses, OpenAI clients, and Claude Desktop.",
   "icon": "images/icon.png",
-  "version": "0.0.18",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gratajik/vscode-copilot-proxy"
+    "url": "https://github.com/cruonline/copilot-proxy"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.107.0"
   },
   "categories": [
     "Other"
@@ -22,42 +22,67 @@
   "contributes": {
     "commands": [
       {
-        "command": "copilot-proxy.start",
-        "title": "Copilot Proxy: Start Server"
+        "command": "copilot-gateway.exportCodexCatalog",
+        "title": "Copilot Gateway: Export Codex Model Catalog"
       },
       {
-        "command": "copilot-proxy.stop",
-        "title": "Copilot Proxy: Stop Server"
+        "command": "copilot-gateway.authorizeDirectResponses",
+        "title": "Copilot Gateway: Authorize Native Codex Responses"
       },
       {
-        "command": "copilot-proxy.status",
-        "title": "Copilot Proxy: Show Status"
+        "command": "copilot-gateway.start",
+        "title": "Copilot Gateway: Start Server"
+      },
+      {
+        "command": "copilot-gateway.stop",
+        "title": "Copilot Gateway: Stop Server"
+      },
+      {
+        "command": "copilot-gateway.status",
+        "title": "Copilot Gateway: Show Status"
+      },
+      {
+        "command": "copilot-gateway.setupClaudeGateway",
+        "title": "Copilot Gateway: Configure Claude Desktop Gateway"
+      },
+      {
+        "command": "copilot-gateway.restoreClaudeGateway",
+        "title": "Copilot Gateway: Restore Claude Desktop Configuration"
       }
     ],
     "configuration": {
-      "title": "Copilot Proxy",
+      "title": "Copilot Gateway",
       "properties": {
-        "copilotProxy.port": {
+        "copilotGateway.responsesBackend": {
+          "type": "string",
+          "enum": [
+            "vscode",
+            "direct"
+          ],
+          "default": "vscode",
+          "description": "Responses transport: public VS Code model adapter, or opt-in native Copilot forwarding for reasoning history and compaction. Native endpoint support depends on your Copilot model/account."
+        },
+        "copilotGateway.port": {
           "type": "number",
-          "default": 8080,
+          "default": 8090,
           "description": "Port number for the proxy server"
         },
-        "copilotProxy.autoStart": {
+        "copilotGateway.autoStart": {
           "type": "boolean",
           "default": true,
           "description": "Automatically start the server when VS Code launches"
         },
-        "copilotProxy.defaultModel": {
+        "copilotGateway.defaultModel": {
           "type": "string",
           "default": "",
           "description": "Default model to use when not specified in request (leave empty to use first available)"
         },
-        "copilotProxy.logRequestsToUI": {
+        "copilotGateway.logRequestsToUI": {
           "type": "boolean",
           "default": false,
           "description": "Log all requests and responses to the status panel UI"
         },
-        "copilotProxy.rawLogging": {
+        "copilotGateway.rawLogging": {
           "type": "boolean",
           "default": false,
           "description": "Log raw request/response content to the output channel (verbose)"
@@ -71,8 +96,9 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "mocha --require ts-node/register 'src/test/**/*.test.ts'",
+    "test": "mocha --require ts-node/register \"src/test/**/*.test.ts\"",
     "test:coverage": "nyc npm run test",
+    "test:codex": "npm run compile && node scripts/test-codex-compatibility.cjs",
     "docs:check": "node scripts/check-docs.js",
     "docs:inventory": "node scripts/update-inventory.js"
   },
@@ -91,5 +117,6 @@
     "sinon": "^21.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0"
-  }
+  },
+  "license": "MIT"
 }

@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 # Get version from package.json
 $packageJson = Get-Content -Path "package.json" -Raw | ConvertFrom-Json
 $version = $packageJson.version
-$releaseName = "copilot-proxy-v$version"
+$releaseName = "$($packageJson.name)-v$version"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -100,5 +100,5 @@ Get-ChildItem -Recurse $releaseDir | ForEach-Object {
 }
 Write-Host ""
 Write-Host "Upload to GitHub Releases:" -ForegroundColor Yellow
-Write-Host "  https://github.com/gratajik/vscode-copilot-proxy/releases/new" -ForegroundColor White
+Write-Host "  https://github.com/cruonline/copilot-proxy/releases/new" -ForegroundColor White
 Write-Host ""

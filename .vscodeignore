@@ -9,4 +9,15 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 node_modules/**
+out/test/**
+docs/recovery/**
+release/**
+.claude/**
+scripts/**
+.mocharc.json
+CLAUDE.md
+VSCode_Copilot_Proxy_Security_Assessment.md
+rebuild.ps1
+p.cmd
+tsconfig.test.json
 research/**
